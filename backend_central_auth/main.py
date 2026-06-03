@@ -21,7 +21,7 @@ import uvicorn
 # ── Load environment ──────────────────────────────────────────────────────────
 load_dotenv()
 DATABASE_URL = os.getenv("DATABASE_URL")
-PORT         = int(os.getenv("PORT", "8000"))
+PORT         = int(os.getenv("PORT", "5432"))
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL not set. Check backend_central_auth/.env")
 
@@ -273,7 +273,7 @@ async def health_check():
 
 if __name__ == "__main__":
     print("\n" + "=" * 70)
-    print("AeroGuard Central Auth  —  port 8000")
+    print("AeroGuard Central Auth  —  port 8001")
     print("=" * 70)
     print(f"Database : {'SET' if DATABASE_URL else 'MISSING — check .env'}")
     print(f"Port     : {PORT}")
