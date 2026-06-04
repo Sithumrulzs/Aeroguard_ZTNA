@@ -60,15 +60,17 @@ def insert_audit(event_type: str, username: str, client_ip: str,
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
+                # Let PostgreSQL handle the created_at column natively using its own rules.
+                # This prevents ISO format mismatches from breaking the transaction silently.
                 cur.execute(
                     """INSERT INTO audit_logs
-                       (event_type, username, client_ip, status, details, created_at)
-                       VALUES (%s, %s, %s, %s, %s, %s)""",
-                    (event_type, username, client_ip, status_val,
-                     details, datetime.now(timezone.utc).isoformat())
+                       (event_type, username, client_ip, status, details)
+                       VALUES (%s, %s, %s, %s, %s)""",
+                    (event_type, username, client_ip, status_val, details)
                 )
     except Exception as e:
-        print(f"[-] Audit log failed: {e}")
+        # This will now explicitly stream the exact error into Choreo logs if your table structure rejects it.
+        print(f"\n[CRITICAL AUDIT ERROR] -> Failed to write to public.audit_logs table: {e}\n")
 
 
 # ── Pydantic models ───────────────────────────────────────────────────────────
@@ -102,34 +104,44 @@ async def root():
 async def central_login(payload: LoginRequest, request: Request):
     client_ip = request.client.host
 
+    # Sanitize the inputs completely dynamically to clear out trailing whitespaces 
+    # that cause string searches to fail on text engines.
+    username_clean = payload.username.strip()
+    password_clean = payload.password.strip()
+
+    print(f"\n[AEROGUARD LIVE TRACE] Querying DB dynamically for user: '{username_clean}'")
+
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
-                cur.execute("SELECT * FROM users WHERE username = %s",
-                            (payload.username,))
+                cur.execute("SELECT * FROM users WHERE username = %s", (username_clean,))
                 user = cur.fetchone()
+        print(f"[AEROGUARD LIVE TRACE] Step 1 Complete -> Database query executed. Row found: {user is not None}")
     except Exception as e:
+        print(f"[AEROGUARD LIVE TRACE] Step 1 FAILED -> DB Query broken: {e}")
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
-    # Verify bcrypt password
+    # Verify bcrypt password against fetched database row credentials dynamically
     password_valid = False
     if user:
+        print(f"[AEROGUARD LIVE TRACE] Step 2 Complete -> Hash found in table. Running raw bcrypt calculation...")
         try:
             password_valid = bcrypt.checkpw(
-                payload.password.encode(),
+                password_clean.encode(),
                 user["password_hash"].encode()
             )
-        except Exception:
+            print(f"[AEROGUARD LIVE TRACE] Step 3 Complete -> Cryptographic match result: {password_valid}")
+        except Exception as crypto_err:
+            print(f"[AEROGUARD LIVE TRACE] Step 3 FAILED -> Bcrypt execution crashed: {crypto_err}")
             password_valid = False
 
     if not user or not password_valid:
-        insert_audit("APP_LOGIN", payload.username, client_ip,
-                     "DENIED", "Invalid credentials.")
+        insert_audit("APP_LOGIN", username_clean, client_ip, "DENIED", "Invalid credentials.")
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
                             detail="Access Denied: Invalid credentials.")
 
-    insert_audit("APP_LOGIN", payload.username, client_ip,
-                 "SUCCESS", f"Login successful. Role: {user['role']}")
+    insert_audit("APP_LOGIN", username_clean, client_ip, "SUCCESS", f"Login successful. Role: {user['role']}")
+    print(f"[AEROGUARD LIVE TRACE] SUCCESS -> Access Granted dynamically to administrator workspace: '{username_clean}'\n")
 
     return {
         "status":    "authenticated",
