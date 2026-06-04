@@ -7,19 +7,13 @@ spec:
   displayName: AeroGuard Central Auth
   type: service
   source:
-    git:
+    repository:
       url: https://github.com/Sithumrulzs/backend_central_auth.git
       ref: main
       context: .
   build:
-    dockerfile: |
-      FROM python:3.11-slim
-      WORKDIR /app
-      COPY requirements.txt .
-      RUN python -m pip install --no-cache-dir -r requirements.txt
-      COPY . .
-      EXPOSE 8001
-      CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
+    dockerfile: Dockerfile
+    context: .
   healthCheck:
     type: http
     endpoint: /health
