@@ -12,21 +12,14 @@ spec:
       ref: main
       context: .
   build:
-    language: python
-    version: 3.11.x
-    path: .
-    commands:
-      - python -m pip install --no-cache-dir -r requirements.txt
-  run:
-    command:
-      - python
-      - -m
-      - uvicorn
-      - main:app
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8001"
+    dockerfile: |
+      FROM python:3.11-slim
+      WORKDIR /app
+      COPY requirements.txt .
+      RUN python -m pip install --no-cache-dir -r requirements.txt
+      COPY . .
+      EXPOSE 8001
+      CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"]
   healthCheck:
     type: http
     endpoint: /health
