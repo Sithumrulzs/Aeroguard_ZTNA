@@ -1,0 +1,451 @@
+openapi: 3.0.0
+info:
+  title: AeroGuard ZTNA — Central Auth
+  description: Identity management, login, vendor provisioning, and dashboard APIs for Zero Trust Network Access
+  version: 1.0.0
+  contact:
+    name: AeroGuard Team
+    url: https://github.com/Sithumrulzs/backend_central_auth
+
+servers:
+  - url: http://localhost:8001
+    description: Local development server
+  - url: https://69e1efef-e429-472f-bfce-68e0ac0360ff-dev.e1-us-east-azure.choreoapis.dev/default/backendcentralauth/v1.0
+    description: Choreo production (WSO2 Cloud)
+
+tags:
+  - name: Health
+    description: Service health and status
+  - name: Authentication
+    description: User login and credential validation
+  - name: Logging
+    description: Audit logging and SIEM integration
+  - name: Vendor Management
+    description: Vendor provisioning and JIT access
+  - name: Dashboard
+    description: SIEM dashboard statistics and telemetry
+
+paths:
+  /:
+    get:
+      tags:
+        - Health
+      summary: Service status
+      description: Returns basic service information
+      operationId: root
+      responses:
+        "200":
+          description: Service is online
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: online
+                  service:
+                    type: string
+                    example: AeroGuard ZTNA Central Auth
+
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Health check
+      description: Readiness probe for container orchestration
+      operationId: health_check
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: AeroGuard Central Auth
+
+  /api/v1/auth/login:
+    post:
+      tags:
+        - Authentication
+      summary: Admin login
+      description: |
+        Authenticate user with username and password.
+        Validates credentials against the users table.
+        Returns user role, device_id, and session token.
+      operationId: central_login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authentication successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+                    example: Access Denied - Invalid credentials.
+        "500":
+          description: Database error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+                    example: Database error - connection failed
+
+  /api/v1/logs/write:
+    post:
+      tags:
+        - Logging
+      summary: Ingest audit log
+      description: |
+        Write audit logs to central SIEM archive.
+        Used by gateways and mobile apps to report events.
+      operationId: ingest_log
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LogIngestPayload"
+      responses:
+        "200":
+          description: Log synchronized
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: synchronized
+                  message:
+                    type: string
+                    example: Log stored in central SIEM archive.
+
+  /api/v1/provision-vendor:
+    post:
+      tags:
+        - Vendor Management
+      summary: Provision vendor JIT access
+      description: |
+        Create a new vendor session with time-bound access.
+        Generates a QR token for scanning at the gateway.
+        Vendor credentials are ephemeral (no login password).
+      operationId: provision_vendor
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VendorProvisionPayload"
+      responses:
+        "200":
+          description: Vendor provisioned successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: profile_synced
+                  message:
+                    type: string
+                    example: Vendor session created.
+                  generated_qr_string:
+                    type: string
+                    example: AEROGUARD_QR_ACMECORP_1717504800
+        "500":
+          description: Provisioning failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+                    example: Provision failed - database error
+
+  /api/v1/dashboard/stats:
+    get:
+      tags:
+        - Dashboard
+      summary: Dashboard statistics
+      description: |
+        Retrieve high-level dashboard metrics:
+        - Active admin count and names
+        - Active vendor count
+        - ZTNA knock attempts today
+        - Gateway security status
+      operationId: dashboard_stats
+      responses:
+        "200":
+          description: Statistics retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardStats"
+        "500":
+          description: Query failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+                    example: Stats query failed - database error
+
+  /api/v1/dashboard/telemetry:
+    get:
+      tags:
+        - Dashboard
+      summary: Dashboard telemetry and events
+      description: |
+        Retrieve recent audit events and active session information.
+        Optional `limit` query parameter (default: 10) controls event count.
+      operationId: dashboard_telemetry
+      parameters:
+        - name: limit
+          in: query
+          description: Maximum number of recent events to return
+          required: false
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 100
+      responses:
+        "200":
+          description: Telemetry retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardTelemetry"
+        "500":
+          description: Query failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  detail:
+                    type: string
+                    example: Telemetry query failed - database error
+
+components:
+  schemas:
+    LoginRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+          description: Admin username
+          example: sithum.it
+        password:
+          type: string
+          description: Admin password (bcrypt hashed on server)
+          example: It@kss69
+          format: password
+
+    LoginResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [authenticated]
+          example: authenticated
+        username:
+          type: string
+          description: Authenticated username
+          example: sithum.it
+        role:
+          type: string
+          description: User role (admin, vendor, user)
+          enum: [admin, vendor, user]
+          example: admin
+        device_id:
+          type: string
+          description: Associated device identifier
+          example: admin_sithum_it
+        token:
+          type: string
+          description: Session token for subsequent requests
+          example: aeroguard_session_stub
+
+    LogIngestPayload:
+      type: object
+      required:
+        - event_type
+        - username
+        - client_ip
+        - status
+        - details
+      properties:
+        event_type:
+          type: string
+          description: Type of audit event
+          enum: [APP_LOGIN, ZTNA_KNOCK, VENDOR_KNOCK, VENDOR_PROVISION, SIGNATURE_FAILED, REPLAY_ATTACK]
+          example: ZTNA_KNOCK
+        username:
+          type: string
+          description: User who triggered the event
+          example: sithum.it
+        client_ip:
+          type: string
+          description: Source IP address
+          example: 192.168.1.100
+        status:
+          type: string
+          description: Event outcome
+          enum: [SUCCESS, DENIED, PENDING, EXPIRED]
+          example: SUCCESS
+        details:
+          type: string
+          description: Additional event details
+          example: Knock from device admin_sithum_it - signature verified
+
+    VendorProvisionPayload:
+      type: object
+      required:
+        - vendor_username
+        - company_name
+        - clearance_level
+        - target_device_id
+        - valid_until
+      properties:
+        vendor_username:
+          type: string
+          description: Vendor account identifier
+          example: vendor_acme
+        company_name:
+          type: string
+          description: Vendor company name
+          example: ACME Corp
+        clearance_level:
+          type: string
+          description: Access clearance tier
+          enum: [basic, standard, premium]
+          example: standard
+        target_device_id:
+          type: string
+          description: Target device or laptop identifier
+          example: laptop_vendor_001
+        valid_until:
+          type: string
+          format: date-time
+          description: ISO8601 expiration timestamp
+          example: "2026-06-11T23:59:59Z"
+        qr_token:
+          type: string
+          description: Optional custom QR token (auto-generated if omitted)
+          example: AEROGUARD_QR_CUSTOM_TOKEN_12345
+
+    DashboardStats:
+      type: object
+      properties:
+        active_admins:
+          type: integer
+          description: Number of active admin accounts
+          example: 3
+        admin_names:
+          type: array
+          description: List of active admin usernames
+          items:
+            type: string
+          example: [sithum.it, dulshi.it, yasas.it]
+        active_vendors:
+          type: integer
+          description: Number of active vendor sessions
+          example: 2
+        total_knocks_today:
+          type: integer
+          description: Successful ZTNA knock count today
+          example: 15
+        gateway_status:
+          type: string
+          description: Overall gateway security status
+          enum: [SECURED, WARNING, CRITICAL]
+          example: SECURED
+
+    DashboardTelemetry:
+      type: object
+      properties:
+        events:
+          type: array
+          description: Recent audit events
+          items:
+            type: object
+            properties:
+              event_type:
+                type: string
+              username:
+                type: string
+              client_ip:
+                type: string
+              status:
+                type: string
+              details:
+                type: string
+              created_at:
+                type: string
+                format: date-time
+          example:
+            - event_type: ZTNA_KNOCK
+              username: sithum.it
+              client_ip: 192.168.1.100
+              status: GRANTED
+              details: Signature verified
+              created_at: "2026-06-04T10:30:00Z"
+        active_admins:
+          type: integer
+          example: 3
+        active_admin_names:
+          type: array
+          items:
+            type: string
+          example: [sithum.it, dulshi.it]
+        active_vendors:
+          type: integer
+          example: 2
+        active_vendor_names:
+          type: array
+          items:
+            type: string
+          example: [vendor_acme, vendor_techcorp]
+        gateway_status:
+          type: string
+          example: SECURED
+
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string
+          description: Error message
+          example: Invalid credentials
