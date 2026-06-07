@@ -13,12 +13,12 @@ class ApiConstants {
   static const String centralAuthUrl =
       "https://69e1efef-e429-472f-bfce-68e0ac0360ff-dev.e1-us-east-azure.choreoapis.dev/default/backendcentralauth/v1.0";
 
-  static const String loginEndpoint = "$centralAuthUrl/auth/login";
+  static const String loginEndpoint = "$centralAuthUrl/api/v1/auth/login";
 
   static const String dashboardStatsEndpoint =
-      "$centralAuthUrl/dashboard/stats";
+      "$centralAuthUrl/api/v1/dashboard/stats";
   static const String dashboardTelemetryEndpoint =
-      "$centralAuthUrl/dashboard/telemetry";
+      "$centralAuthUrl/api/v1/dashboard/telemetry";
 
   // ——— Timeouts ———
   static const int connectionTimeoutSeconds = 15;

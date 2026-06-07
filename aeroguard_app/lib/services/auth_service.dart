@@ -13,7 +13,7 @@ class AuthService {
 
   static final _vault = const FlutterSecureStorage();
 
-  /// Authenticate against the central auth server (backend_central_auth:8000).
+  /// Authenticate against the central auth server hosted on Choreo.
   static Future<AuthResponse> login(String username, String password) async {
     try {
       // Login goes to central auth server (port 8000), not the gateway
@@ -34,6 +34,8 @@ class AuthService {
           );
 
       debugPrint('[*] Login response status: ${response.statusCode}');
+
+      debugPrint('[*] Login response body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
