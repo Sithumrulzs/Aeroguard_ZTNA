@@ -4,9 +4,12 @@ class ApiConstants {
   static const String gatewayPort = "8000";
   static const String baseUrl = "http://$gatewayIp:$gatewayPort/api/v1";
 
-  static const String knockEndpoint = "$baseUrl/knock";
-  static const String vendorKnockEndpoint = "$baseUrl/vendor_knock";
-  static const String provisionVendorEndpoint = "$baseUrl/provision-vendor";
+  static const String knockEndpoint        = "$baseUrl/knock";
+  static const String vendorKnockEndpoint  = "$baseUrl/vendor_knock";
+
+  // ——— Central Auth – vendor provisioning (cloud, works off-network) ———
+  static const String vendorProvisionEndpoint =
+      "$centralAuthUrl/api/v1/provision-vendor";
 
   // ——— Central Auth – identity / login (WSO2 Cloud Control Plane) ———
   // PASTE YOUR LIVE CHOREO HTTPS URL HERE (Remove the trailing slash if necessary)

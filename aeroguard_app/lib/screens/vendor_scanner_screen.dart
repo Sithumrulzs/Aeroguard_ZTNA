@@ -74,7 +74,8 @@ class _VendorScannerScreenState extends State<VendorScannerScreen> {
       slideUpRoute(VendorDashboard(
         vendorName: data['vendor_name'] as String,
         company: data['company'] as String,
-        sessionHours: (data['session_hours'] as num).toInt(),
+        token: data['token'] as String,
+        expiresAt: data['expires_at'] as String,
       )),
     );
   }

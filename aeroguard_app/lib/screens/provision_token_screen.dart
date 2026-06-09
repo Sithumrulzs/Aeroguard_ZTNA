@@ -3,6 +3,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
+import 'package:http/http.dart' as http;
+import '../config/api_constants.dart';
 
 class ProvisionTokenScreen extends StatefulWidget {
   const ProvisionTokenScreen({super.key});
@@ -55,32 +57,92 @@ class _ProvisionTokenScreenState extends State<ProvisionTokenScreen>
     if (!_formValid) return;
     FocusScope.of(context).unfocus();
     setState(() => _isGenerating = true);
-    await Future.delayed(const Duration(milliseconds: 1200));
 
-    final now = DateTime.now().toUtc();
-    final issuedAt = now.toIso8601String();
-    final expiresAt =
-        now.add(Duration(hours: _sessionHours)).toIso8601String();
-    final rawToken =
-        'VENDOR_JIT_${_vendorNameCtrl.text.trim()}_$issuedAt';
-    final token =
-        sha256.convert(utf8.encode(rawToken)).toString();
+    final vendorName = _vendorNameCtrl.text.trim();
+    final company    = _companyCtrl.text.trim();
 
-    final payload = jsonEncode({
-      'type': 'aeroguard_vendor_access',
-      'vendor_name': _vendorNameCtrl.text.trim(),
-      'company': _companyCtrl.text.trim(),
-      'session_hours': _sessionHours,
-      'token': token,
-      'issued_at': issuedAt,
-      'expires_at': expiresAt,
+    final now       = DateTime.now().toUtc();
+    final expiresAt = now.add(Duration(hours: _sessionHours)).toIso8601String();
+    final rawToken  = 'VENDOR_JIT_${vendorName}_${now.toIso8601String()}';
+    final token     = sha256.convert(utf8.encode(rawToken)).toString();
+
+    // Register the session on the backend first.
+    try {
+      final response = await http
+          .post(
+            Uri.parse(ApiConstants.vendorProvisionEndpoint),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'vendor_username':  'vendor_${vendorName.toLowerCase().replaceAll(' ', '_')}',
+              'company_name':     company,
+              'clearance_level':  'standard',
+              'target_device_id': 'vendor_device',
+              'valid_until':      expiresAt,
+              'qr_token':         token,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      if (response.statusCode != 200) {
+        if (mounted) {
+          _showProvisionError(
+            'Failed to create vendor session (${response.statusCode}). '
+            'Check Choreo connectivity.',
+          );
+        }
+        setState(() => _isGenerating = false);
+        return;
+      }
+    } catch (e) {
+      if (mounted) {
+        _showProvisionError(
+          'Central Auth unreachable. Ensure Choreo is deployed and reachable.',
+        );
+      }
+      setState(() => _isGenerating = false);
+      return;
+    }
+
+    final qrPayload = jsonEncode({
+      'type':        'aeroguard_vendor_access',
+      'token':       token,
+      'vendor_name': vendorName,
+      'company':     company,
+      'expires_at':  expiresAt,
     });
 
     setState(() {
-      _generatedPayload = payload;
+      _generatedPayload = qrPayload;
       _isGenerating = false;
     });
     _qrCtrl.forward(from: 0);
+  }
+
+  void _showProvisionError(String message) {
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0D1421),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.redAccent, size: 20),
+            SizedBox(width: 10),
+            Text('Provision Failed',
+                style: TextStyle(color: Colors.white, fontSize: 15)),
+          ],
+        ),
+        content: Text(message,
+            style: const TextStyle(color: Color(0xFFC0C7D4), fontSize: 13, height: 1.5)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK',
+                style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w700)),
+          ),
+        ],
+      ),
+    );
   }
 
   @override

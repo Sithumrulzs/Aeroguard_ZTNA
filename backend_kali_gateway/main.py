@@ -9,8 +9,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from datetime import datetime, timezone
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from dotenv import load_dotenv
+import asyncio
 import psycopg2
 import psycopg2.extras
 import ecdsa
@@ -27,7 +28,70 @@ PORT         = int(os.getenv("PORT", "8000"))
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL not set. Check backend_kali_gateway/.env")
 
-app = FastAPI(title="AeroGuard ZTNA Gateway")
+async def _expire_vendor_sessions():
+    """Background loop: every 30 s, mark overdue sessions as expired and revoke iptables."""
+    while True:
+        await asyncio.sleep(30)
+        now = datetime.now(timezone.utc)
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT vs.qr_token, vs.vendor_username, vs.valid_until,
+                                  u.locked_mac
+                           FROM public.vendor_sessions vs
+                           LEFT JOIN public.users u ON u.username = vs.vendor_username
+                           WHERE vs.status = 'active'
+                             AND vs.valid_until < %s""",
+                        (now.isoformat(),)
+                    )
+                    expired = cur.fetchall()
+
+                    for s in expired:
+                        token = s["qr_token"]
+                        ip    = (s["locked_mac"] or "").strip()
+                        ts    = str(s["valid_until"])
+
+                        cur.execute(
+                            "UPDATE public.vendor_sessions SET status = 'expired' WHERE qr_token = %s",
+                            (token,)
+                        )
+
+                        if ip:
+                            try:
+                                datestop = datetime.fromisoformat(
+                                    ts.replace("Z", "+00:00")
+                                ).strftime("%Y-%m-%dT%H:%M:%S")
+                                subprocess.run(
+                                    ["sudo", "iptables", "-D", "INPUT",
+                                     "-s", ip, "-m", "time",
+                                     "--datestop", datestop, "--utc", "-j", "ACCEPT"],
+                                    check=False, capture_output=True,
+                                )
+                            except Exception:
+                                pass
+
+                        print(f"[!] VENDOR SESSION EXPIRED: {s['vendor_username']} | IP: {ip}")
+                        log_audit("VENDOR_SESSION_EXPIRED", s["vendor_username"],
+                                  "EXPIRED", ip or "unknown",
+                                  {"token": token[:16] + "...", "valid_until": ts})
+        except Exception as e:
+            print(f"[-] Session expiry check failed: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(_expire_vendor_sessions())
+    print("[*] Vendor session expiry monitor started (30 s interval)")
+    yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+app = FastAPI(title="AeroGuard ZTNA Gateway", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
