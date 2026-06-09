@@ -78,7 +78,6 @@ paths:
         - Authentication
       summary: Admin login
       x-wso2-disable-security: true
-      # ----------------------------------------
       description: |
         Authenticate user with username and password.
         Validates credentials against the users table.
