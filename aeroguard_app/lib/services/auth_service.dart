@@ -76,6 +76,33 @@ class AuthService {
     }
   }
 
+  // ── Device binding (PKI / TOFU) ──────────────────────────────────────────
+
+  /// Registers the device's public key with the backend.
+  /// Returns the HTTP status code: 200 = bound, 403 = already bound, 5xx = error.
+  static Future<int> registerDevice(
+      String username, String deviceId, String publicKey) async {
+    try {
+      final uri = Uri.parse(ApiConstants.registerDeviceEndpoint);
+      final response = await http
+          .post(
+            uri,
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'username':       username,
+              'device_id':      deviceId,
+              'public_key_pem': publicKey,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      debugPrint('[*] Device registration status: ${response.statusCode}');
+      return response.statusCode;
+    } catch (e) {
+      debugPrint('[-] Device registration request failed: $e');
+      return 500;
+    }
+  }
+
   // ── Biometric credential storage ──────────────────────────────────────────
 
   /// Save credentials so the biometric screen can log in automatically.

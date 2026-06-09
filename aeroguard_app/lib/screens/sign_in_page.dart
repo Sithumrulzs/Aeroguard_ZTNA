@@ -66,11 +66,33 @@ class _SignInPageState extends State<SignInPage>
       if (!mounted) return;
 
       if (response.success) {
-        // 3. Ensure the cleaned variable goes into the Secure Enclave
         final loggedInUsername = response.username ?? trimmedUsername;
-        final enteredPassword = _passCtrl.text;
+        final enteredPassword  = _passCtrl.text;
 
+        // Generate / verify device keys in the secure vault.
         await EnclaveService.initializeDevice(loggedInUsername);
+
+        // PKI/TOFU device binding — register public key with the backend.
+        final publicKey = await EnclaveService.getPublicKey();
+        final deviceId  = await EnclaveService.getDeviceId();
+
+        if (publicKey != null) {
+          final bindStatus = await AuthService.registerDevice(
+            loggedInUsername, deviceId, publicKey,
+          );
+          if (bindStatus == 403) {
+            // Account is locked to a different device — wipe local identity
+            // and force the user to contact IT.
+            await EnclaveService.clearDevice();
+            await AuthService.logout();
+            if (mounted) {
+              _showErrorDialog(
+                'Device limit reached. Contact IT to reset binding.',
+              );
+            }
+            return;
+          }
+        }
 
         _userCtrl.clear();
         _passCtrl.clear();

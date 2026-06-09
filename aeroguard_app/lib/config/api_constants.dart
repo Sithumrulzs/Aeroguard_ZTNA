@@ -13,7 +13,9 @@ class ApiConstants {
   static const String centralAuthUrl =
       "https://69e1efef-e429-472f-bfce-68e0ac0360ff-dev.e1-us-east-azure.choreoapis.dev/default/backendcentralauth/v1.0";
 
-  static const String loginEndpoint = "$centralAuthUrl/api/v1/auth/login";
+  static const String loginEndpoint          = "$centralAuthUrl/api/v1/auth/login";
+  static const String registerDeviceEndpoint = "$centralAuthUrl/api/v1/auth/register-device";
+  static const String adminResetDeviceEndpoint = "$centralAuthUrl/api/v1/auth/admin/reset-device";
 
   static const String dashboardStatsEndpoint =
       "$centralAuthUrl/api/v1/dashboard/stats";

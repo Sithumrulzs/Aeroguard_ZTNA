@@ -118,6 +118,71 @@ paths:
                     type: string
                     example: Database error - connection failed
 
+  /api/v1/auth/register-device:
+    post:
+      tags:
+        - Authentication
+      summary: Register device public key (PKI/TOFU)
+      x-wso2-disable-security: true
+      description: |
+        Binds a device's ECDSA public key to the user account on first use.
+        Subsequent attempts from a different device are rejected (TOFU lock).
+      operationId: register_device
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, device_id, public_key_pem]
+              properties:
+                username:
+                  type: string
+                  example: sithum.it
+                device_id:
+                  type: string
+                  example: admin_sithum_it
+                public_key_pem:
+                  type: string
+                  example: 04a1b2c3...
+      responses:
+        "200":
+          description: Device bound successfully
+        "403":
+          description: Account already bound to a different device
+        "404":
+          description: User not found
+
+  /api/v1/auth/admin/reset-device:
+    post:
+      tags:
+        - Authentication
+      summary: Superadmin device binding reset
+      x-wso2-disable-security: true
+      description: |
+        Clears the public key and device ID for a target user.
+        Requires the requester to hold the 'superadmin' role in the database.
+      operationId: admin_reset_device
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [superadmin_username, target_username]
+              properties:
+                superadmin_username:
+                  type: string
+                  example: superadmin
+                target_username:
+                  type: string
+                  example: sithum.it
+      responses:
+        "200":
+          description: Device binding cleared
+        "403":
+          description: Superadmin privileges required
+
   /api/v1/logs/write:
     post:
       tags:

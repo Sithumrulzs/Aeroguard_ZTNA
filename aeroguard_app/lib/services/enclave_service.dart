@@ -99,6 +99,15 @@ class EnclaveService {
     return derivedKey;
   }
 
+  /// Wipes all local device keys and identity from the vault.
+  /// Called when the backend rejects registration (device already bound).
+  static Future<void> clearDevice() async {
+    await _vault.delete(key: _privateKeyName);
+    await _vault.delete(key: _publicKeyName);
+    await _vault.delete(key: _deviceIdName);
+    debugPrint('[!] Device identity wiped from vault.');
+  }
+
   static Future<Map<String, dynamic>?> generateZeroTrustPayload(
     String username,
   ) async {

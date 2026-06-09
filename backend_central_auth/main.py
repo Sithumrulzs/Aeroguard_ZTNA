@@ -112,6 +112,15 @@ class VendorProvisionPayload(BaseModel):
     valid_until:      str
     qr_token:         Optional[str] = None
 
+class RegisterDevicePayload(BaseModel):
+    username:       str
+    device_id:      str
+    public_key_pem: str
+
+class AdminResetPayload(BaseModel):
+    superadmin_username: str
+    target_username:     str
+
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.get("/")
@@ -172,6 +181,96 @@ async def central_login(payload: LoginRequest, request: Request):
         "device_id": user.get("device_id") or "pending",
         "token":     "aeroguard_session_stub",
     }
+
+
+@app.post("/api/v1/auth/register-device")
+async def register_device(payload: RegisterDevicePayload, request: Request):
+    client_ip = request.client.host
+    username  = payload.username.strip()
+
+    # Placeholder values written by seed scripts — treated as unbound.
+    DUMMY_KEYS = {"dummy_key_until_flutter_is_connected", "dummy_key_until_scanned", ""}
+
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT public_key_pem FROM public.users WHERE username = %s",
+                    (username,)
+                )
+                row = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    if not row:
+        raise HTTPException(status_code=404, detail="User not found.")
+
+    existing_key = row["public_key_pem"] or ""
+
+    # TOFU lock — reject if a real key is already bound to this account.
+    if existing_key and existing_key not in DUMMY_KEYS:
+        insert_audit("DEVICE_BIND", username, client_ip, "DENIED",
+                     "Account already bound to a device.")
+        raise HTTPException(status_code=403,
+                            detail="Account already bound to a device.")
+
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE public.users
+                       SET public_key_pem = %s, device_id = %s
+                       WHERE username = %s""",
+                    (payload.public_key_pem, payload.device_id, username)
+                )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    insert_audit("DEVICE_BIND", username, client_ip, "SUCCESS",
+                 f"Device bound. ID: {payload.device_id}")
+    print(f"[+] DEVICE BOUND: {username} -> {payload.device_id}")
+    return {"status": "bound", "message": "Device successfully registered."}
+
+
+@app.post("/api/v1/auth/admin/reset-device")
+async def admin_reset_device(payload: AdminResetPayload, request: Request):
+    client_ip   = request.client.host
+    superadmin  = payload.superadmin_username.strip()
+    target      = payload.target_username.strip()
+
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT role FROM public.users WHERE username = %s",
+                    (superadmin,)
+                )
+                row = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    if not row or row["role"] != "superadmin":
+        insert_audit("DEVICE_RESET", superadmin, client_ip, "DENIED",
+                     "Unauthorized reset attempt.")
+        raise HTTPException(status_code=403,
+                            detail="Access Denied: Superadmin privileges required.")
+
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE public.users
+                       SET public_key_pem = NULL, device_id = NULL
+                       WHERE username = %s""",
+                    (target,)
+                )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    insert_audit("DEVICE_RESET", superadmin, client_ip, "SUCCESS",
+                 f"Device binding reset for {target}.")
+    print(f"[+] DEVICE RESET: {target} (by {superadmin})")
+    return {"status": "reset", "message": f"Device binding cleared for {target}."}
 
 
 @app.post("/api/v1/logs/write")
