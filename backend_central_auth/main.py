@@ -82,6 +82,8 @@ app = FastAPI(
     description="Identity, login, vendor provisioning and SIEM dashboard.",
     version="1.0.0",
     lifespan=lifespan,
+
+    root_path="/default/backendcentralauth/v1.0"
 )
 
 app.add_middleware(
