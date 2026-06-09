@@ -83,7 +83,19 @@ app = FastAPI(
     version="1.0.0",
     lifespan=lifespan,
 
-    root_path="/default/backendcentralauth/v1.0"
+    # 1. Tells routing we are behind a proxy path
+    root_path="/default/backendcentralauth/v1.0",
+    
+    # 2. Forces Swagger to look in the exact right place for the JSON map
+    openapi_url="/default/backendcentralauth/v1.0/openapi.json",
+    
+    # 3. Hardcodes the absolute URL for the "Execute" button
+    servers=[
+        {
+            "url": "https://69e1efef-e429-472f-bfce-68e0ac0360ff-dev.e1-us-east-azure.choreoapis.dev/default/backendcentralauth/v1.0", 
+            "description": "Choreo Production Gateway"
+        }
+    ]
 )
 
 app.add_middleware(
