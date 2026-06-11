@@ -48,7 +48,9 @@ class _VendorCountdownTimerState extends State<VendorCountdownTimer> {
 
   @override
   Widget build(BuildContext context) {
-    final double fraction = _secondsRemaining / widget.initialSeconds;
+    final double fraction = widget.initialSeconds > 0
+        ? (_secondsRemaining / widget.initialSeconds).clamp(0.0, 1.0)
+        : 0.0;
     final Color timerColor = fraction > 0.25 ? Colors.orangeAccent : Colors.redAccent;
 
     return Column(

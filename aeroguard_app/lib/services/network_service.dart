@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_constants.dart';
 import 'enclave_service.dart';
+import 'location_service.dart';
 
 class NetworkService {
   static final Uri knockUri = Uri.parse(ApiConstants.knockEndpoint);
@@ -31,10 +32,16 @@ class NetworkService {
     debugPrint('🚨 [DIAGNOSTIC] Timestamp  : ${payload['timestamp']}');
     debugPrint('🚨 [DIAGNOSTIC] Signature  : ${(payload['signature'] as String).substring(0, 16)}...');
 
-    // FastAPI TelemetryPayload requires a sibling 'telemetry' dict field.
+    // Attach GPS coordinates to the telemetry dict (best-effort, non-blocking).
+    final position = await LocationService.getPosition();
+
     final body = <String, dynamic>{
       ...payload,
-      'telemetry': <String, dynamic>{},
+      'telemetry': <String, dynamic>{
+        if (position != null) 'latitude':  position.latitude,
+        if (position != null) 'longitude': position.longitude,
+        if (position != null) 'accuracy':  position.accuracy,
+      },
     };
 
     try {

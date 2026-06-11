@@ -4,6 +4,7 @@ import '../config/transitions.dart';
 import '../services/auth_service.dart';
 import '../services/biometric_service.dart';
 import '../services/enclave_service.dart';
+import '../services/location_service.dart';
 import 'admin_dashboard.dart';
 import 'vendor_scanner_screen.dart';
 
@@ -18,8 +19,10 @@ class _SignInPageState extends State<SignInPage>
     with SingleTickerProviderStateMixin {
   final TextEditingController _userCtrl = TextEditingController();
   final TextEditingController _passCtrl = TextEditingController();
-  bool _isLoading = false;
-  bool _obscure = true;
+  bool _isLoading   = false;
+  bool _isBioLoading = false;
+  bool _obscure     = true;
+  bool _biometricReady = false; // true when sensor available + creds saved
 
   late AnimationController _fadeCtrl;
   late Animation<double> _fadeAnim;
@@ -37,6 +40,15 @@ class _SignInPageState extends State<SignInPage>
       begin: const Offset(0, 0.04),
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOutCubic));
+    _checkBiometricReadiness();
+  }
+
+  Future<void> _checkBiometricReadiness() async {
+    final hardwareAvailable = await BiometricService.isAvailable();
+    final credentialsSaved  = await AuthService.hasBiometricCredentials();
+    if (mounted) {
+      setState(() => _biometricReady = hardwareAvailable && credentialsSaved);
+    }
   }
 
   @override
@@ -45,6 +57,64 @@ class _SignInPageState extends State<SignInPage>
     _passCtrl.dispose();
     _fadeCtrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _handleBiometricLogin() async {
+    setState(() => _isBioLoading = true);
+    try {
+      final result = await BiometricService.authenticate(
+        reason: 'AeroGuard ZTNA: Verify your identity to access the datacenter gateway.',
+      );
+
+      if (!mounted) return;
+
+      if (result != BiometricAuthResult.success) {
+        // Surface a specific, actionable message for every failure mode.
+        _showErrorDialog(BiometricService.describeResult(result));
+        return;
+      }
+
+      // Biometric confirmed — retrieve the stored credentials and log in.
+      final creds = await AuthService.getBiometricCredentials();
+      if (creds == null) {
+        _showErrorDialog('Saved credentials not found. Please sign in with your password.');
+        setState(() => _biometricReady = false);
+        return;
+      }
+
+      final response = await AuthService.login(creds['username']!, creds['password']!);
+      if (!mounted) return;
+
+      if (response.success) {
+        final username = response.username ?? creds['username']!;
+        await EnclaveService.initializeDevice(username);
+        final publicKey = await EnclaveService.getPublicKey();
+        final deviceId  = await EnclaveService.getDeviceId();
+        if (publicKey != null) {
+          final bindStatus = await AuthService.registerDevice(username, deviceId, publicKey);
+          if (bindStatus == 403) {
+            await EnclaveService.clearDevice();
+            await AuthService.logout();
+            if (mounted) {
+              _showErrorDialog('Device limit reached. Contact IT to reset binding.');
+            }
+            return;
+          }
+        }
+        LocationService.sendToBackend(username);
+        if (mounted) {
+          Navigator.pushReplacement(context, premiumRoute(const AdminDashboard()));
+        }
+      } else {
+        // Stored password was rejected (e.g. admin changed it server-side).
+        // Clear stale credentials and fall back to manual login.
+        await AuthService.clearBiometricCredentials();
+        setState(() => _biometricReady = false);
+        _showErrorDialog('Saved credentials are no longer valid. Please sign in with your password.');
+      }
+    } finally {
+      if (mounted) setState(() => _isBioLoading = false);
+    }
   }
 
   Future<void> _handleLogin() async {
@@ -96,6 +166,9 @@ class _SignInPageState extends State<SignInPage>
 
         _userCtrl.clear();
         _passCtrl.clear();
+
+        // Fire-and-forget — does not block navigation.
+        LocationService.sendToBackend(loggedInUsername);
 
         // Offer biometric save on first login if hardware is available
         // and credentials haven't been saved before.
@@ -373,6 +446,84 @@ class _SignInPageState extends State<SignInPage>
                               ),
                             ),
                           ),
+
+                          // ── Biometric login — visible only after first
+                          //    password login when sensor + creds are ready ──
+                          if (_biometricReady) ...[
+                            const SizedBox(height: 16),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Divider(
+                                    color: Colors.white.withValues(alpha: 0.07),
+                                  ),
+                                ),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                                  child: Text(
+                                    'OR',
+                                    style: TextStyle(
+                                      color: const Color(0xFF475569).withValues(alpha: 0.7),
+                                      fontSize: 10,
+                                      letterSpacing: 2.0,
+                                    ),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Divider(
+                                    color: Colors.white.withValues(alpha: 0.07),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 16),
+                            GestureDetector(
+                              onTap: _isBioLoading ? null : _handleBiometricLogin,
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 200),
+                                height: 52,
+                                width: double.infinity,
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(14),
+                                  color: const Color(0xFF00C3FF).withValues(alpha: 0.05),
+                                  border: Border.all(
+                                    color: const Color(0xFF00C3FF).withValues(alpha: 0.25),
+                                  ),
+                                ),
+                                child: Center(
+                                  child: _isBioLoading
+                                      ? const SizedBox(
+                                          height: 20,
+                                          width: 20,
+                                          child: CircularProgressIndicator(
+                                            color: Color(0xFF00C3FF),
+                                            strokeWidth: 2,
+                                          ),
+                                        )
+                                      : const Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            Icon(
+                                              Icons.fingerprint,
+                                              color: Color(0xFF00C3FF),
+                                              size: 22,
+                                            ),
+                                            SizedBox(width: 10),
+                                            Text(
+                                              'BIOMETRIC LOGIN',
+                                              style: TextStyle(
+                                                color: Color(0xFF00C3FF),
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w700,
+                                                letterSpacing: 2.5,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ],
                       ),
                     ),

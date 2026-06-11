@@ -27,6 +27,8 @@ class ApiConstants {
       "$centralAuthUrl/api/v1/dashboard/vendor-sessions";
   static const String revokeVendorEndpoint =
       "$centralAuthUrl/api/v1/admin/revoke-vendor";
+  static const String updateLocationEndpoint =
+      "$centralAuthUrl/api/v1/auth/update-location";
 
   // ——— Timeouts ———
   static const int connectionTimeoutSeconds = 15;

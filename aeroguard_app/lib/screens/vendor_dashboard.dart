@@ -1,10 +1,15 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_constants.dart';
+import '../services/location_service.dart';
 import '../widgets/vendor_countdown_timer.dart';
 import '../config/transitions.dart';
 import 'sign_in_page.dart';
+
+enum _VKnockStatus { idle, knocking, success, failed }
 
 class VendorDashboard extends StatefulWidget {
   final String vendorName;
@@ -25,8 +30,7 @@ class VendorDashboard extends StatefulWidget {
 }
 
 class _VendorDashboardState extends State<VendorDashboard> {
-  bool _isKnocking  = false;
-  bool _tunnelActive = false;
+  _VKnockStatus _knockStatus = _VKnockStatus.idle;
 
   int _remainingSeconds() {
     try {
@@ -50,8 +54,9 @@ class _VendorDashboardState extends State<VendorDashboard> {
   }
 
   Future<void> _handleVendorKnock() async {
-    setState(() => _isKnocking = true);
+    setState(() => _knockStatus = _VKnockStatus.knocking);
     try {
+      final position = await LocationService.getPosition();
       final response = await http
           .post(
             Uri.parse(ApiConstants.vendorKnockEndpoint),
@@ -59,14 +64,16 @@ class _VendorDashboardState extends State<VendorDashboard> {
             body: jsonEncode({
               'token_hash':  widget.token,
               'vendor_name': widget.vendorName,
+              if (position != null) 'latitude':  position.latitude,
+              if (position != null) 'longitude': position.longitude,
             }),
           )
-          .timeout(const Duration(seconds: 10));
+          .timeout(const Duration(seconds: 15));
 
       if (!mounted) return;
 
       if (response.statusCode == 200) {
-        setState(() => _tunnelActive = true);
+        setState(() => _knockStatus = _VKnockStatus.success);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text(
@@ -80,21 +87,27 @@ class _VendorDashboardState extends State<VendorDashboard> {
             ),
             backgroundColor: Colors.orangeAccent,
             behavior: SnackBarBehavior.floating,
-            shape:
-                RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             margin: const EdgeInsets.all(16),
           ),
         );
       } else {
-        final body = jsonDecode(response.body) as Map<String, dynamic>;
+        setState(() => _knockStatus = _VKnockStatus.failed);
+        Map<String, dynamic> body = {};
+        try {
+          body = jsonDecode(response.body) as Map<String, dynamic>;
+        } catch (_) {}
         _showKnockError(body['detail']?.toString() ?? 'Tunnel authorization failed.');
+        await Future.delayed(const Duration(seconds: 3));
+        if (mounted) setState(() => _knockStatus = _VKnockStatus.idle);
       }
     } catch (_) {
       if (mounted) {
+        setState(() => _knockStatus = _VKnockStatus.failed);
         _showKnockError('Gateway unreachable. Ensure you are on the AeroGuard network.');
+        await Future.delayed(const Duration(seconds: 3));
+        if (mounted) setState(() => _knockStatus = _VKnockStatus.idle);
       }
-    } finally {
-      if (mounted) setState(() => _isKnocking = false);
     }
   }
 
@@ -108,27 +121,43 @@ class _VendorDashboardState extends State<VendorDashboard> {
           children: [
             Icon(Icons.block, color: Colors.redAccent, size: 20),
             SizedBox(width: 10),
-            Text('Access Denied',
-                style: TextStyle(color: Colors.white, fontSize: 15)),
+            Text('Access Denied', style: TextStyle(color: Colors.white, fontSize: 15)),
           ],
         ),
-        content: Text(message,
-            style: const TextStyle(
-                color: Color(0xFFC0C7D4), fontSize: 13, height: 1.5)),
+        content: Text(
+          message,
+          style: const TextStyle(color: Color(0xFFC0C7D4), fontSize: 13, height: 1.5),
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK',
-                style: TextStyle(
-                    color: Colors.orangeAccent, fontWeight: FontWeight.w700)),
+            child: const Text(
+              'OK',
+              style: TextStyle(color: Colors.orangeAccent, fontWeight: FontWeight.w700),
+            ),
           ),
         ],
       ),
     );
   }
 
+  Color get _statusColor => switch (_knockStatus) {
+    _VKnockStatus.success => const Color(0xFF10B981),
+    _VKnockStatus.failed  => const Color(0xFFEF4444),
+    _                     => Colors.orangeAccent,
+  };
+
+  String get _statusLabel => switch (_knockStatus) {
+    _VKnockStatus.idle     => 'TAP TO INITIATE TUNNEL',
+    _VKnockStatus.knocking => 'ESTABLISHING TUNNEL...',
+    _VKnockStatus.success  => 'TUNNEL ACTIVE',
+    _VKnockStatus.failed   => 'ACCESS DENIED',
+  };
+
   @override
   Widget build(BuildContext context) {
+    final isSuccess = _knockStatus == _VKnockStatus.success;
+
     return Scaffold(
       backgroundColor: const Color(0xFF050810),
       body: Container(
@@ -145,26 +174,22 @@ class _VendorDashboardState extends State<VendorDashboard> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                // ── Header bar ────────────────────────────────────
+                // ── Header bar ────────────────────────────────────────────
                 Padding(
-                  padding: const EdgeInsets.only(top: 20, bottom: 28),
+                  padding: const EdgeInsets.only(top: 20, bottom: 16),
                   child: Row(
                     children: [
                       Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         decoration: BoxDecoration(
                           color: Colors.orangeAccent.withValues(alpha: 0.08),
                           borderRadius: BorderRadius.circular(20),
-                          border: Border.all(
-                              color:
-                                  Colors.orangeAccent.withValues(alpha: 0.35)),
+                          border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.35)),
                         ),
                         child: const Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            Icon(Icons.warning_amber_rounded,
-                                color: Colors.orangeAccent, size: 14),
+                            Icon(Icons.warning_amber_rounded, color: Colors.orangeAccent, size: 14),
                             SizedBox(width: 6),
                             Text(
                               'RESTRICTED ACCESS',
@@ -180,49 +205,42 @@ class _VendorDashboardState extends State<VendorDashboard> {
                       ),
                       const Spacer(),
                       GestureDetector(
-                        onTap: () => Navigator.pushReplacement(
-                            context, fadeRoute(const SignInPage())),
+                        onTap: () => Navigator.pushReplacement(context, fadeRoute(const SignInPage())),
                         child: Container(
                           padding: const EdgeInsets.all(8),
                           decoration: BoxDecoration(
                             color: const Color(0xFF0D1421),
                             borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                                color: Colors.white.withValues(alpha: 0.07)),
+                            border: Border.all(color: Colors.white.withValues(alpha: 0.07)),
                           ),
-                          child: const Icon(Icons.logout,
-                              color: Color(0xFF475569), size: 16),
+                          child: const Icon(Icons.logout, color: Color(0xFF475569), size: 16),
                         ),
                       ),
                     ],
                   ),
                 ),
 
-                // ── Vendor identity card ──────────────────────────
+                // ── Vendor identity card ──────────────────────────────────
                 Container(
                   width: double.infinity,
-                  padding: const EdgeInsets.all(18),
+                  padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
                     color: const Color(0xFF0D1421),
                     borderRadius: BorderRadius.circular(18),
-                    border: Border.all(
-                        color: Colors.orangeAccent.withValues(alpha: 0.2)),
+                    border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.2)),
                   ),
                   child: Row(
                     children: [
                       Container(
-                        height: 46,
-                        width: 46,
+                        height: 42,
+                        width: 42,
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: Colors.orangeAccent.withValues(alpha: 0.1),
-                          border: Border.all(
-                              color:
-                                  Colors.orangeAccent.withValues(alpha: 0.3)),
+                          border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.3)),
                         ),
                         child: const Center(
-                          child: Icon(Icons.person_outline,
-                              color: Colors.orangeAccent, size: 22),
+                          child: Icon(Icons.person_outline, color: Colors.orangeAccent, size: 20),
                         ),
                       ),
                       const SizedBox(width: 14),
@@ -234,33 +252,26 @@ class _VendorDashboardState extends State<VendorDashboard> {
                               widget.vendorName,
                               style: const TextStyle(
                                 color: Colors.white,
-                                fontSize: 15,
+                                fontSize: 14,
                                 fontWeight: FontWeight.w700,
                               ),
                               overflow: TextOverflow.ellipsis,
                             ),
-                            const SizedBox(height: 2),
+                            const SizedBox(height: 1),
                             Text(
                               widget.company,
-                              style: TextStyle(
-                                color: const Color(0xFF94A3B8)
-                                    .withValues(alpha: 0.8),
-                                fontSize: 12,
-                              ),
+                              style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 12),
                               overflow: TextOverflow.ellipsis,
                             ),
                           ],
                         ),
                       ),
                       Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 5),
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
                         decoration: BoxDecoration(
                           color: Colors.orangeAccent.withValues(alpha: 0.1),
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                              color:
-                                  Colors.orangeAccent.withValues(alpha: 0.3)),
+                          border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.3)),
                         ),
                         child: Text(
                           _expiryLabel(),
@@ -276,113 +287,81 @@ class _VendorDashboardState extends State<VendorDashboard> {
                   ),
                 ),
 
-                const SizedBox(height: 16),
-
-                // ── Session timer — revealed only after knock ─────
-                if (_tunnelActive) ...[
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(20),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFF0D1421),
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                          color: Colors.orangeAccent.withValues(alpha: 0.14)),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.orangeAccent.withValues(alpha: 0.04),
-                          blurRadius: 24,
-                        ),
-                      ],
-                    ),
+                // ── Central knock button — always at center ───────────────
+                Expanded(
+                  child: Center(
                     child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       children: [
-                        Row(
-                          children: [
-                            Container(
-                              padding: const EdgeInsets.all(7),
-                              decoration: BoxDecoration(
-                                color: Colors.orangeAccent.withValues(alpha: 0.1),
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: const Icon(Icons.timer_outlined,
-                                  color: Colors.orangeAccent, size: 15),
-                            ),
-                            const SizedBox(width: 12),
-                            const Text(
-                              'SESSION TIMER',
+                        _VendorKnockButton(
+                          status: _knockStatus,
+                          onTap: _knockStatus == _VKnockStatus.idle
+                              ? _handleVendorKnock
+                              : null,
+                        ),
+                        const SizedBox(height: 22),
+                        // Post-knock: live countdown; otherwise: status label
+                        if (isSuccess)
+                          VendorCountdownTimer(
+                            initialSeconds: _remainingSeconds(),
+                            onExpire: () {
+                              if (mounted) {
+                                Navigator.pushReplacement(
+                                    context, fadeRoute(const SignInPage()));
+                              }
+                            },
+                          )
+                        else
+                          AnimatedSwitcher(
+                            duration: const Duration(milliseconds: 300),
+                            child: Text(
+                              _statusLabel,
+                              key: ValueKey(_knockStatus),
                               style: TextStyle(
-                                color: Color(0xFF94A3B8),
+                                color: _statusColor.withValues(alpha: 0.75),
                                 fontSize: 11,
-                                letterSpacing: 2.0,
+                                letterSpacing: 2.5,
                                 fontWeight: FontWeight.w600,
                               ),
                             ),
-                            const Spacer(),
-                            Text(
-                              _expiryLabel(),
-                              style: TextStyle(
-                                color: Colors.orangeAccent.withValues(alpha: 0.6),
-                                fontSize: 10,
-                                letterSpacing: 0.3,
-                              ),
-                            ),
-                          ],
-                        ),
-                        Divider(
-                            color: Colors.white.withValues(alpha: 0.05),
-                            height: 24),
-                        VendorCountdownTimer(
-                          initialSeconds: _remainingSeconds(),
-                          onExpire: () {
-                            if (mounted) {
-                              Navigator.pushReplacement(
-                                  context, fadeRoute(const SignInPage()));
-                            }
-                          },
-                        ),
+                          ),
                       ],
                     ),
                   ),
+                ),
 
-                  const SizedBox(height: 16),
-
-                  // ── Info chips ──────────────────────────────────
+                // ── Post-knock: info chips + TUNNEL ACTIVE badge ──────────
+                if (isSuccess) ...[
                   Row(
                     children: [
-                      _InfoChip(
-                          icon: Icons.visibility_outlined, label: 'MONITORED'),
-                      const SizedBox(width: 10),
+                      _InfoChip(icon: Icons.visibility_outlined, label: 'MONITORED'),
+                      const SizedBox(width: 8),
                       _InfoChip(icon: Icons.save_outlined, label: 'LOGGED'),
-                      const SizedBox(width: 10),
+                      const SizedBox(width: 8),
                       _InfoChip(icon: Icons.access_time, label: 'JIT ACCESS'),
                     ],
                   ),
-
-                  const Spacer(),
-
-                  // ── Tunnel active status badge ──────────────────
+                  const SizedBox(height: 12),
                   Container(
-                    height: 56,
+                    height: 52,
                     width: double.infinity,
                     decoration: BoxDecoration(
                       borderRadius: BorderRadius.circular(14),
-                      color: Colors.orangeAccent.withValues(alpha: 0.08),
-                      border: Border.all(
-                          color: Colors.orangeAccent.withValues(alpha: 0.4)),
+                      color: const Color(0xFF10B981).withValues(alpha: 0.06),
+                      border: Border.all(color: const Color(0xFF10B981).withValues(alpha: 0.35)),
                     ),
                     child: const Center(
                       child: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           Icon(Icons.check_circle_outline,
-                              color: Colors.orangeAccent, size: 18),
+                              color: Color(0xFF10B981), size: 16),
                           SizedBox(width: 10),
                           Text(
                             'TUNNEL ACTIVE',
                             style: TextStyle(
-                              color: Colors.orangeAccent,
-                              fontSize: 14,
+                              color: Color(0xFF10B981),
+                              fontSize: 13,
                               fontWeight: FontWeight.w800,
                               letterSpacing: 3.0,
                             ),
@@ -391,106 +370,177 @@ class _VendorDashboardState extends State<VendorDashboard> {
                       ),
                     ),
                   ),
-                ] else ...[
-                  // ── Pre-knock: prompt to authorize ──────────────
-                  Expanded(
-                    child: Center(
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            Icons.vpn_lock_outlined,
-                            size: 52,
-                            color: Colors.orangeAccent.withValues(alpha: 0.25),
-                          ),
-                          const SizedBox(height: 14),
-                          Text(
-                            'TUNNEL NOT YET AUTHORIZED',
-                            style: TextStyle(
-                              color: Colors.orangeAccent.withValues(alpha: 0.45),
-                              fontSize: 10,
-                              letterSpacing: 2.0,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
-                          const SizedBox(height: 6),
-                          Text(
-                            'Tap the button below to open your\nsecure vendor tunnel.',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              color: const Color(0xFF475569).withValues(alpha: 0.7),
-                              fontSize: 12,
-                              height: 1.6,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-
-                  // ── Authorize button ────────────────────────────
-                  GestureDetector(
-                    onTap: _isKnocking ? null : _handleVendorKnock,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      height: 56,
-                      width: double.infinity,
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(14),
-                        gradient: _isKnocking
-                            ? LinearGradient(colors: [
-                                Colors.orangeAccent.withValues(alpha: 0.6),
-                                Colors.orange.withValues(alpha: 0.6),
-                              ])
-                            : const LinearGradient(
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                                colors: [Colors.orangeAccent, Colors.orange],
-                              ),
-                        boxShadow: _isKnocking
-                            ? null
-                            : [
-                                BoxShadow(
-                                  color: Colors.orangeAccent
-                                      .withValues(alpha: 0.28),
-                                  blurRadius: 20,
-                                  offset: const Offset(0, 6),
-                                ),
-                              ],
-                      ),
-                      child: Center(
-                        child: _isKnocking
-                            ? const SizedBox(
-                                height: 20,
-                                width: 20,
-                                child: CircularProgressIndicator(
-                                    color: Colors.black, strokeWidth: 2),
-                              )
-                            : const Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(Icons.vpn_key_outlined,
-                                      color: Colors.black, size: 18),
-                                  SizedBox(width: 10),
-                                  Text(
-                                    'AUTHORIZE TUNNEL',
-                                    style: TextStyle(
-                                      color: Colors.black,
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w800,
-                                      letterSpacing: 3.0,
-                                    ),
-                                  ),
-                                ],
-                              ),
-                      ),
-                    ),
-                  ),
                 ],
 
-                const SizedBox(height: 28),
+                const SizedBox(height: 24),
               ],
             ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Pulsing circular knock button (orange theme) ──────────────────────────────
+class _VendorKnockButton extends StatefulWidget {
+  final _VKnockStatus status;
+  final VoidCallback? onTap;
+
+  const _VendorKnockButton({required this.status, required this.onTap});
+
+  @override
+  State<_VendorKnockButton> createState() => _VendorKnockButtonState();
+}
+
+class _VendorKnockButtonState extends State<_VendorKnockButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      duration: const Duration(milliseconds: 2000),
+      vsync: this,
+    )..repeat(reverse: true);
+    _pulse = Tween<double>(begin: 0.0, end: 1.0).animate(
+        CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut));
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  Color get _color => switch (widget.status) {
+    _VKnockStatus.success => const Color(0xFF10B981),
+    _VKnockStatus.failed  => const Color(0xFFEF4444),
+    _                     => Colors.orangeAccent,
+  };
+
+  @override
+  Widget build(BuildContext context) {
+    final color = _color;
+
+    return GestureDetector(
+      onTap: widget.onTap,
+      child: AnimatedBuilder(
+        animation: _pulse,
+        builder: (context, _) => SizedBox(
+          height: 220,
+          width: 220,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              // Ring 3 — outermost, faintest
+              Container(
+                height: 202 + _pulse.value * 10,
+                width:  202 + _pulse.value * 10,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: color.withValues(alpha: 0.06 + _pulse.value * 0.05),
+                    width: 1,
+                  ),
+                ),
+              ),
+              // Ring 2
+              Container(
+                height: 164 + _pulse.value * 7,
+                width:  164 + _pulse.value * 7,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: color.withValues(alpha: 0.12 + _pulse.value * 0.10),
+                    width: 1,
+                  ),
+                ),
+              ),
+              // Ring 1 — innermost halo
+              Container(
+                height: 126 + _pulse.value * 4,
+                width:  126 + _pulse.value * 4,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: color.withValues(alpha: 0.20 + _pulse.value * 0.15),
+                    width: 1.5,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.04 + _pulse.value * 0.08),
+                      blurRadius: 28,
+                      spreadRadius: 4,
+                    ),
+                  ],
+                ),
+              ),
+              // Center button
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 400),
+                height: 112,
+                width:  112,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  gradient: RadialGradient(
+                    center: const Alignment(-0.3, -0.3),
+                    radius: 1,
+                    colors: [
+                      color.withValues(alpha: 0.28),
+                      color.withValues(alpha: 0.08),
+                    ],
+                  ),
+                  border: Border.all(color: color.withValues(alpha: 0.7), width: 1.5),
+                  boxShadow: [
+                    BoxShadow(
+                      color: color.withValues(alpha: 0.20 + _pulse.value * 0.16),
+                      blurRadius: 36,
+                      spreadRadius: 4,
+                    ),
+                  ],
+                ),
+                child: Center(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (widget.status == _VKnockStatus.knocking)
+                        SizedBox(
+                          height: 30,
+                          width: 30,
+                          child: CircularProgressIndicator(color: color, strokeWidth: 2),
+                        )
+                      else
+                        SvgPicture.asset(
+                          'assets/images/Light Logo.svg',
+                          height: 30,
+                          width: 30,
+                          colorFilter: ColorFilter.mode(color, BlendMode.srcIn),
+                        ),
+                      const SizedBox(height: 7),
+                      Text(
+                        switch (widget.status) {
+                          _VKnockStatus.success => 'TUNNEL\nACTIVE',
+                          _VKnockStatus.failed  => 'ACCESS\nDENIED',
+                          _VKnockStatus.knocking => 'CONNECTING\n...',
+                          _VKnockStatus.idle    => 'AUTHORIZE\nTUNNEL',
+                        },
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: color,
+                          fontSize: 7.5,
+                          fontWeight: FontWeight.w800,
+                          letterSpacing: 1.2,
+                          height: 1.5,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
         ),
       ),
@@ -511,14 +561,12 @@ class _InfoChip extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.orangeAccent.withValues(alpha: 0.05),
         borderRadius: BorderRadius.circular(8),
-        border:
-            Border.all(color: Colors.orangeAccent.withValues(alpha: 0.15)),
+        border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.15)),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Icon(icon,
-              size: 11, color: Colors.orangeAccent.withValues(alpha: 0.7)),
+          Icon(icon, size: 11, color: Colors.orangeAccent.withValues(alpha: 0.7)),
           const SizedBox(width: 5),
           Text(
             label,

@@ -147,6 +147,8 @@ class VendorProvisionPayload(BaseModel):
 class VendorKnockPayload(BaseModel):
     token_hash:  str
     vendor_name: str
+    latitude:    float | None = None
+    longitude:   float | None = None
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -322,7 +324,8 @@ async def vendor_knock(payload: VendorKnockPayload, request: Request):
     print(f"🔒 [VENDOR TUNNEL] {client_ip} → open until {datestop} UTC")
 
     log_audit("VENDOR_KNOCK", payload.vendor_name, "GRANTED", client_ip,
-              {"company": session["company_name"], "clearance": session["clearance_level"]})
+              {"company": session["company_name"], "clearance": session["clearance_level"],
+               "latitude": payload.latitude, "longitude": payload.longitude})
 
     return {"status": "success", "message": "Vendor tunnel authorised.", "role": "vendor",
             "vendor_name": payload.vendor_name, "company": session["company_name"],

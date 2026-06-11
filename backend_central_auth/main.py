@@ -125,6 +125,11 @@ class RevokeVendorPayload(BaseModel):
     admin_username:  str
     vendor_username: str
 
+class LocationUpdatePayload(BaseModel):
+    username:  str
+    latitude:  float
+    longitude: float
+
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.get("/")
@@ -524,6 +529,25 @@ async def revoke_vendor(payload: RevokeVendorPayload, request: Request):
         return {"status": "revoked", "sessions_affected": affected}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Revoke failed: {e}")
+
+
+@app.post("/api/v1/auth/update-location")
+async def update_user_location(payload: LocationUpdatePayload):
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE public.users
+                       SET last_seen_lat = %s,
+                           last_seen_lng = %s,
+                           last_seen_at  = %s
+                       WHERE username = %s""",
+                    (payload.latitude, payload.longitude,
+                     datetime.now(timezone.utc).isoformat(), payload.username)
+                )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Location update failed: {e}")
+    return {"status": "ok"}
 
 
 @app.get("/health")
