@@ -323,6 +323,21 @@ async def vendor_knock(payload: VendorKnockPayload, request: Request):
     )
     print(f"🔒 [VENDOR TUNNEL] {client_ip} → open until {datestop} UTC")
 
+    # Store vendor's GPS at knock time so Supabase always has the latest position.
+    if payload.latitude is not None and payload.longitude is not None:
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """UPDATE public.vendor_sessions
+                           SET last_seen_lat = %s, last_seen_lng = %s, last_seen_at = %s
+                           WHERE qr_token = %s""",
+                        (payload.latitude, payload.longitude,
+                         datetime.now(timezone.utc).isoformat(), payload.token_hash)
+                    )
+        except Exception as e:
+            print(f"[!] Vendor location update skipped: {e}")
+
     log_audit("VENDOR_KNOCK", payload.vendor_name, "GRANTED", client_ip,
               {"company": session["company_name"], "clearance": session["clearance_level"],
                "latitude": payload.latitude, "longitude": payload.longitude})

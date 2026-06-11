@@ -39,16 +39,17 @@ class EnclaveService {
   static Future<void> initializeDevice(String username) async {
     final String? existingKey = await _vault.read(key: _privateKeyName);
     final String? backendId   = await _vault.read(key: _backendDeviceIdKey);
-    final bool    hasBackendId = backendId != null && backendId.isNotEmpty;
+    // "pending" is a legacy sentinel — never treat it as a real device ID.
+    final bool hasBackendId =
+        backendId != null && backendId.isNotEmpty && backendId != 'pending';
 
     if (existingKey == null) {
-      // First run — generate key pair and store server-assigned device_id.
+      // First run — generate key pair.
       debugPrint('[*] No key found. Generating hardware identity...');
       final keys = await compute(_generateEcdsaKeyPair, null);
 
-      final deviceId = hasBackendId
-          ? backendId
-          : 'admin_${username.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '_')}';
+      // Device ID = server-assigned value (e.g. "sithum.it"), else username.
+      final deviceId = hasBackendId ? backendId : username;
 
       await _vault.write(key: _privateKeyName, value: keys[0]);
       await _vault.write(key: _publicKeyName,  value: keys[1]);
@@ -58,13 +59,20 @@ class EnclaveService {
       debugPrint('[!] PUBLIC KEY FOR DATABASE: ${keys[1]}');
       debugPrint('[!] DEVICE ID: $deviceId');
     } else {
-      // Keys already exist — but always sync device_id with the server's
-      // latest value so a stale vault ID (e.g. admin_admin) gets corrected.
+      // Keys already exist — sync device_id with server's latest value.
       if (hasBackendId) {
         final storedId = await _vault.read(key: _deviceIdName);
         if (storedId != backendId) {
           await _vault.write(key: _deviceIdName, value: backendId);
           debugPrint('[~] Device ID synced from server: $backendId');
+        }
+      } else {
+        // No valid backend ID — replace any stale placeholder with username.
+        final storedId = await _vault.read(key: _deviceIdName);
+        final isStale  = storedId == null || storedId.isEmpty || storedId == 'pending';
+        if (isStale) {
+          await _vault.write(key: _deviceIdName, value: username);
+          debugPrint('[~] Stale device ID "$storedId" replaced with: $username');
         }
       }
       debugPrint('[+] Secure Enclave verified. Hardware identity intact.');
@@ -111,12 +119,10 @@ class EnclaveService {
   static Future<Map<String, dynamic>?> generateZeroTrustPayload(
     String username,
   ) async {
-    // Always prefer the device_id the server assigned at login.
-    // This corrects any stale value (e.g. 'admin_admin') left in the vault
-    // from before the central auth server was connected.
+    // Prefer the server-assigned device_id; never use "pending" sentinel.
     final backendId = await _vault.read(key: _backendDeviceIdKey);
     final localId   = await _vault.read(key: _deviceIdName);
-    final deviceId  = (backendId != null && backendId.isNotEmpty)
+    final deviceId  = (backendId != null && backendId.isNotEmpty && backendId != 'pending')
         ? backendId
         : localId;
 

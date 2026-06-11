@@ -32,16 +32,11 @@ class NetworkService {
     debugPrint('🚨 [DIAGNOSTIC] Timestamp  : ${payload['timestamp']}');
     debugPrint('🚨 [DIAGNOSTIC] Signature  : ${(payload['signature'] as String).substring(0, 16)}...');
 
-    // Attach GPS coordinates to the telemetry dict (best-effort, non-blocking).
-    final position = await LocationService.getPosition();
-
+    // GPS must NOT block the knock — send the packet immediately.
+    // Location is pushed to the central auth server after the knock completes.
     final body = <String, dynamic>{
       ...payload,
-      'telemetry': <String, dynamic>{
-        if (position != null) 'latitude':  position.latitude,
-        if (position != null) 'longitude': position.longitude,
-        if (position != null) 'accuracy':  position.accuracy,
-      },
+      'telemetry': const <String, dynamic>{},
     };
 
     try {
@@ -64,6 +59,8 @@ class NetworkService {
 
       if (response.statusCode == 200) {
         debugPrint('[+] KNOCK ACCEPTED — gateway open.');
+        // Fire-and-forget: push GPS after the knock so it never delays the tunnel.
+        LocationService.sendToBackend(username);
         return true;
       }
       debugPrint(

@@ -130,6 +130,11 @@ class LocationUpdatePayload(BaseModel):
     latitude:  float
     longitude: float
 
+class VendorLocationPayload(BaseModel):
+    token_hash: str
+    latitude:   float
+    longitude:  float
+
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.get("/")
@@ -194,11 +199,21 @@ async def central_login(payload: LoginRequest, request: Request):
     insert_audit("APP_LOGIN", username_clean, client_ip, "SUCCESS", f"Login successful. Role: {user['role']}")
     print(f"[AEROGUARD LIVE TRACE] SUCCESS -> Access Granted dynamically to administrator workspace: '{username_clean}'\n")
 
+    # Use the stored device_id, but never let the sentinel "pending" leak out.
+    # Fall back to the username so admins are identified as e.g. "sithum.it"
+    # and vendors by their assigned login name.
+    stored_device_id = user.get("device_id")
+    effective_device_id = (
+        stored_device_id
+        if (stored_device_id and stored_device_id != "pending")
+        else user["username"]
+    )
+
     return {
         "status":    "authenticated",
         "username":  user["username"],
         "role":      user["role"],
-        "device_id": user.get("device_id") or "pending",
+        "device_id": effective_device_id,
         "token":     "aeroguard_session_stub",
     }
 
@@ -209,10 +224,12 @@ async def register_device(payload: RegisterDevicePayload, request: Request):
     username  = payload.username.strip()
 
     # Placeholder values written by seed/admin scripts — treated as unbound.
+    # "pending" is included so any corrupted rows are transparently re-bound.
     DUMMY_KEYS = {
         "dummy_key_until_flutter_is_connected",
         "dummy_key_until_scanned",
         "manual_admin_provision",
+        "pending",
         "",
     }
 
@@ -239,7 +256,19 @@ async def register_device(payload: RegisterDevicePayload, request: Request):
         pass
 
     elif existing_key == payload.public_key_pem:
-        # Exact same key → same device re-logging in (idempotent).
+        # Exact same key → same device re-logging in.
+        # If device_id is a placeholder (e.g. "pending"), refresh it now.
+        STALE_DEVICE_IDS = {"pending", "", None}
+        if existing_device in STALE_DEVICE_IDS or existing_device != payload.device_id:
+            try:
+                with get_db() as conn:
+                    with conn.cursor() as cur:
+                        cur.execute(
+                            "UPDATE public.users SET device_id = %s WHERE username = %s",
+                            (payload.device_id, username)
+                        )
+            except Exception:
+                pass  # non-fatal
         insert_audit("DEVICE_BIND", username, client_ip, "SKIP",
                      f"Device already registered. ID: {payload.device_id}")
         return {"status": "already_registered", "message": "Device already registered."}
@@ -547,6 +576,26 @@ async def update_user_location(payload: LocationUpdatePayload):
                 )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Location update failed: {e}")
+    return {"status": "ok"}
+
+
+@app.post("/api/v1/vendor/update-location")
+async def update_vendor_location(payload: VendorLocationPayload):
+    """Records GPS coordinates captured at QR scan time against the vendor session."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """UPDATE public.vendor_sessions
+                       SET last_seen_lat = %s,
+                           last_seen_lng = %s,
+                           last_seen_at  = %s
+                       WHERE qr_token = %s""",
+                    (payload.latitude, payload.longitude,
+                     datetime.now(timezone.utc).isoformat(), payload.token_hash)
+                )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Vendor location update failed: {e}")
     return {"status": "ok"}
 
 

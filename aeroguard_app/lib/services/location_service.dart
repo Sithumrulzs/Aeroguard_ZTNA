@@ -50,7 +50,31 @@ class LocationService {
           )
           .timeout(const Duration(seconds: 8));
     } catch (e) {
-      debugPrint('[LocationService] update skipped: $e');
+      debugPrint('[LocationService] user update skipped: $e');
+    }
+  }
+
+  /// Fire-and-forget: captures GPS at vendor QR-scan time and stores it
+  /// against the vendor session in Supabase via the central auth backend.
+  static Future<void> sendVendorLocation(String tokenHash) async {
+    try {
+      final position = await getPosition();
+      if (position == null) return;
+
+      await http
+          .post(
+            Uri.parse(ApiConstants.updateVendorLocationEndpoint),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'token_hash': tokenHash,
+              'latitude':   position.latitude,
+              'longitude':  position.longitude,
+            }),
+          )
+          .timeout(const Duration(seconds: 8));
+      debugPrint('[LocationService] vendor location recorded');
+    } catch (e) {
+      debugPrint('[LocationService] vendor update skipped: $e');
     }
   }
 }

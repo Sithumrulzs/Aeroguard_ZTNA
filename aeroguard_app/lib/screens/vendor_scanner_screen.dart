@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../config/transitions.dart';
+import '../services/location_service.dart';
 import 'vendor_dashboard.dart';
 
 class VendorScannerScreen extends StatefulWidget {
@@ -51,6 +52,9 @@ class _VendorScannerScreenState extends State<VendorScannerScreen> {
     }
 
     setState(() => _isScanned = true);
+
+    // Capture vendor GPS at login (QR scan = vendor auth event).
+    LocationService.sendVendorLocation(data['token'] as String);
 
     if (!mounted) return;
 
