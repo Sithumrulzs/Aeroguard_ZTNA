@@ -8,7 +8,7 @@ Credentials are loaded from .env — never hardcoded.
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from contextlib import asynccontextmanager, contextmanager
 from dotenv import load_dotenv
 import asyncio
@@ -155,10 +155,18 @@ class VendorKnockPayload(BaseModel):
 def verify_ecdsa_signature(public_key_hex: str, raw_payload: str,
                             signature_hex: str) -> bool:
     try:
-        vk = ecdsa.VerifyingKey.from_string(
-            bytes.fromhex(public_key_hex), curve=ecdsa.NIST256p
-        )
+        key_bytes = bytes.fromhex(public_key_hex)
+        # Dart's elliptic package stores the key as an uncompressed point:
+        # 0x04 || X (32 bytes) || Y (32 bytes) = 65 bytes.
+        # Python's ecdsa library wants just the 64-byte X+Y body.
+        if len(key_bytes) == 65 and key_bytes[0] == 0x04:
+            key_bytes = key_bytes[1:]
+
+        vk       = ecdsa.VerifyingKey.from_string(key_bytes, curve=ecdsa.NIST256p)
         msg_hash = hashlib.sha256(raw_payload.encode()).digest()
+
+        # Try compact (r||s) format first — what Dart's toCompactHex() produces.
+        # Fall back to DER encoding for any future interop.
         try:
             return vk.verify_digest(bytes.fromhex(signature_hex), msg_hash)
         except Exception:
@@ -190,19 +198,81 @@ def log_audit(event_type: str, username: str, status: str,
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 @app.post("/api/v1/knock")
 async def admin_knock(payload: TelemetryPayload, request: Request):
-    print(f"\n[*] ADMIN KNOCK FROM: {payload.username}")
     client_ip = request.client.host
+    username  = payload.username.strip()
+    print(f"\n[*] ADMIN KNOCK FROM: {username} @ {client_ip}")
 
-    # [BYPASS MODE] DB lookup, ECDSA verification, and audit log are temporarily
-    # disabled. The knock is accepted for any authenticated user regardless of
-    # device registration or cryptographic state.
-    print(f"[BYPASS] Skipping DB lookup and signature check for {payload.username}")
+    # ── 1. Anti-replay: timestamp must be within 60 seconds ──────────────────
+    try:
+        knock_time = datetime.fromisoformat(payload.timestamp.replace("Z", "+00:00"))
+        age = abs((datetime.now(timezone.utc) - knock_time).total_seconds())
+        if age > 60:
+            log_audit("ADMIN_KNOCK", username, "DENIED - REPLAY", client_ip,
+                      {"reason": f"Timestamp age {age:.1f}s > 60s window"})
+            raise HTTPException(status_code=403,
+                                detail="Knock rejected: timestamp outside allowed window.")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid timestamp in payload.")
 
-    # Firewall — open the client IP (non-fatal if iptables is unavailable)
-    subprocess.run(["sudo", "iptables", "-I", "INPUT", "1",
-                    "-s", client_ip, "-j", "ACCEPT"],
-                   check=False, capture_output=True)
-    print(f"[ZTNA] Firewall rule attempted for {client_ip}")
+    # ── 2. DB lookup — fetch public key and account state ─────────────────────
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT public_key_pem, device_id, is_active FROM public.users"
+                    " WHERE username = %s",
+                    (username,)
+                )
+                user = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    if not user:
+        log_audit("ADMIN_KNOCK", username, "DENIED - NOT FOUND", client_ip, {})
+        raise HTTPException(status_code=403, detail="User not found.")
+
+    if not user["is_active"]:
+        log_audit("ADMIN_KNOCK", username, "DENIED - INACTIVE", client_ip, {})
+        raise HTTPException(status_code=403, detail="Account is disabled.")
+
+    public_key_hex = (user["public_key_pem"] or "").strip()
+
+    # Keys that indicate the device has never completed registration
+    UNBOUND_KEYS = {
+        "dummy_key_until_flutter_is_connected",
+        "dummy_key_until_scanned",
+        "manual_admin_provision",
+        "pending",
+        "",
+    }
+    if public_key_hex in UNBOUND_KEYS:
+        log_audit("ADMIN_KNOCK", username, "DENIED - NO KEY", client_ip,
+                  {"reason": "Device not registered — log in from the app first"})
+        raise HTTPException(status_code=403,
+                            detail="Device not registered. Open the app and log in to bind your key.")
+
+    # ── 3. ECDSA verification ─────────────────────────────────────────────────
+    # Payload signed by the app: "device_id:username:timestamp"
+    raw_payload = f"{payload.device_id}:{username}:{payload.timestamp}"
+    if not verify_ecdsa_signature(public_key_hex, raw_payload, payload.signature):
+        log_audit("ADMIN_KNOCK", username, "DENIED - BAD SIGNATURE", client_ip,
+                  {"device_id": payload.device_id})
+        raise HTTPException(status_code=403, detail="Signature verification failed.")
+
+    # ── 4. Open firewall with 1-hour time expiry ──────────────────────────────
+    expiry     = datetime.now(timezone.utc) + timedelta(hours=1)
+    datestop   = expiry.strftime("%Y-%m-%dT%H:%M:%S")
+    subprocess.run(
+        ["sudo", "iptables", "-I", "INPUT", "1", "-s", client_ip,
+         "-m", "time", "--datestop", datestop, "--utc", "-j", "ACCEPT"],
+        check=False, capture_output=True,
+    )
+    print(f"[+] ADMIN KNOCK GRANTED: {username} @ {client_ip} → open until {datestop} UTC")
+
+    log_audit("ADMIN_KNOCK", username, "GRANTED", client_ip,
+              {"device_id": payload.device_id, "valid_until": datestop})
 
     return {"status": "success", "message": "Access granted. Port knocked successfully."}
 
