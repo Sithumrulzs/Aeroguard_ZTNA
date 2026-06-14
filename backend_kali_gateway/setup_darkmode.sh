@@ -19,8 +19,6 @@
 #  by the iptables time module — no daemon needed.
 # =============================================================================
 
-set -e
-
 POCKET_SUBNET="${POCKET_SUBNET:-192.168.100.0/24}"
 KNOCK_PORT=8000
 
@@ -40,36 +38,51 @@ echo "  Pocket subnet : $POCKET_SUBNET"
 echo "  Knock port    : $KNOCK_PORT"
 echo ""
 
-# ── 1. Flush all existing rules cleanly ───────────────────────────────────────
-echo "[1/5] Flushing existing iptables rules..."
+# ── 0. Disable ufw — it manages its own iptables chains and will override ours
+if command -v ufw &>/dev/null; then
+    UFW_STATUS=$(ufw status 2>/dev/null | head -1)
+    if echo "$UFW_STATUS" | grep -q "active"; then
+        echo "[0/6] Disabling ufw (conflicts with manual iptables)..."
+        ufw disable
+    else
+        echo "[0/6] ufw not active — skipping."
+    fi
+fi
+
+# ── 1. Flush ALL tables and chains cleanly ────────────────────────────────────
+echo "[1/6] Flushing all iptables rules across all tables..."
 iptables -F INPUT
 iptables -F OUTPUT
 iptables -F FORWARD
-iptables -t nat -F  2>/dev/null || true
-iptables -X         2>/dev/null || true
+iptables -t nat    -F 2>/dev/null || true
+iptables -t mangle -F 2>/dev/null || true
+iptables -t raw    -F 2>/dev/null || true
+iptables -X           2>/dev/null || true
 
-# ── 2. Default DROP — the blackhole ───────────────────────────────────────────
-echo "[2/5] Setting default DROP policy (blackhole)..."
+# ── 2. Default DROP policy — the blackhole ────────────────────────────────────
+echo "[2/6] Setting default DROP policy (blackhole)..."
 iptables -P INPUT   DROP
 iptables -P FORWARD DROP
-iptables -P OUTPUT  ACCEPT    # Kali's own outbound is always allowed
+iptables -P OUTPUT  ACCEPT    # Kali's own outbound is always unrestricted
 
-# ── 3. Loopback — localhost must always work ───────────────────────────────────
-echo "[3/5] Allowing loopback..."
+# ── 3. Loopback — localhost must always work ──────────────────────────────────
+echo "[3/6] Allowing loopback..."
 iptables -A INPUT -i lo -j ACCEPT
 
-# ── 4. Return traffic for Kali's own outbound connections ─────────────────────
-echo "[4/5] Allowing established/related return packets..."
-iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+# ── 4. Return traffic — use 'state' module (ships on every Kali kernel) ───────
+# NOTE: 'conntrack' requires xt_conntrack which is not always loaded.
+#       'state' (xt_state) is the older compatible form that always works.
+echo "[4/6] Allowing established/related return packets..."
+iptables -A INPUT -m state --state ESTABLISHED,RELATED -j ACCEPT
 
-# ── 5. Knock endpoint — subnet-restricted only ────────────────────────────────
-# Devices outside the pocket router network cannot even reach this port.
-# Devices on the pocket router WiFi can reach port 8000, but main.py
-# will reject any request that does not carry a valid ECDSA signature.
-echo "[5/5] Opening knock endpoint (port $KNOCK_PORT) for $POCKET_SUBNET..."
+# ── 5. Knock endpoint — subnet-restricted ─────────────────────────────────────
+echo "[5/6] Opening knock endpoint (port $KNOCK_PORT) for $POCKET_SUBNET only..."
 iptables -A INPUT -p tcp --dport "$KNOCK_PORT" -s "$POCKET_SUBNET" -j ACCEPT
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# ── 6. Verify the chain looks right ───────────────────────────────────────────
+echo "[6/6] Verifying active INPUT chain..."
+iptables -L INPUT -n --line-numbers
+
 echo ""
 echo "  ╔══════════════════════════════════════════════════╗"
 echo "  ║   BLACKHOLE ACTIVE — Gateway is now invisible    ║"
@@ -78,11 +91,8 @@ echo "  ║  ping 192.168.100.130    → no reply (DROPPED)   ║"
 echo "  ║  nmap 192.168.100.130    → all ports filtered    ║"
 echo "  ║  port 8000 (inside WiFi) → open for knock only   ║"
 echo "  ║  unsigned knock attempt  → 403 (ECDSA rejected)  ║"
-echo "  ║  verified knock          → timed ACCEPT +1 hour  ║"
+echo "  ║  verified knock          → ACCEPT rule injected  ║"
 echo "  ╚══════════════════════════════════════════════════╝"
-echo ""
-echo "Active INPUT rules:"
-iptables -L INPUT -n --line-numbers
 echo ""
 echo "[*] Dark mode ready. Start the gateway:"
 echo "    cd backend_kali_gateway && python main.py"

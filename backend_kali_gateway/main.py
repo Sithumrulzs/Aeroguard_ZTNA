@@ -261,15 +261,30 @@ async def admin_knock(payload: TelemetryPayload, request: Request):
                   {"device_id": payload.device_id})
         raise HTTPException(status_code=403, detail="Signature verification failed.")
 
-    # ── 4. Open firewall with 1-hour time expiry ──────────────────────────────
-    expiry     = datetime.now(timezone.utc) + timedelta(hours=1)
-    datestop   = expiry.strftime("%Y-%m-%dT%H:%M:%S")
-    subprocess.run(
+    # ── 4. Open firewall — try timed rule, fall back to plain ACCEPT ─────────
+    expiry   = datetime.now(timezone.utc) + timedelta(hours=1)
+    datestop = expiry.strftime("%Y-%m-%dT%H:%M:%S")
+
+    timed = subprocess.run(
         ["sudo", "iptables", "-I", "INPUT", "1", "-s", client_ip,
          "-m", "time", "--datestop", datestop, "--utc", "-j", "ACCEPT"],
-        check=False, capture_output=True,
+        capture_output=True,
     )
-    print(f"[+] ADMIN KNOCK GRANTED: {username} @ {client_ip} → open until {datestop} UTC")
+
+    if timed.returncode == 0:
+        print(f"[+] ADMIN KNOCK GRANTED: {username} @ {client_ip} → timed rule until {datestop} UTC")
+    else:
+        # xt_time kernel module not loaded — insert a plain ACCEPT rule instead.
+        # The session monitor or a re-knock resets this after expiry.
+        print(f"[!] xt_time unavailable ({timed.stderr.decode().strip()}) — using plain ACCEPT")
+        plain = subprocess.run(
+            ["sudo", "iptables", "-I", "INPUT", "1", "-s", client_ip, "-j", "ACCEPT"],
+            capture_output=True,
+        )
+        if plain.returncode != 0:
+            print(f"[-] iptables ACCEPT also failed: {plain.stderr.decode().strip()}")
+        else:
+            print(f"[+] ADMIN KNOCK GRANTED: {username} @ {client_ip} → plain ACCEPT rule inserted")
 
     log_audit("ADMIN_KNOCK", username, "GRANTED", client_ip,
               {"device_id": payload.device_id, "valid_until": datestop})
