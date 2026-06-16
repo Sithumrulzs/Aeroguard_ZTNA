@@ -340,7 +340,7 @@ class _OverviewTabState extends State<_OverviewTab> {
                       childAspectRatio: 1.25,
                       children: [
                         _MetricCard(
-                          label: 'REGISTERED ADMINS',
+                          label: 'ACTIVE ADMINS',
                           value: _registeredAdmins,
                           icon: Icons.person_outline_rounded,
                           names: _registeredAdminNames,

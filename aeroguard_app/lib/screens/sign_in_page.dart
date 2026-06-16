@@ -274,20 +274,26 @@ class _SignInPageState extends State<SignInPage>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF050810),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF050810), Color(0xFF0A1628)],
+      body: Stack(
+        children: [
+          Positioned.fill(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                  colors: [Color(0xFF050810), Color(0xFF0A1628)],
+                ),
+              ),
+            ),
           ),
-        ),
-        child: SafeArea(
-          child: FadeTransition(
-            opacity: _fadeAnim,
-            child: SlideTransition(
-              position: _slideAnim,
-              child: SingleChildScrollView(
+          SafeArea(
+            bottom: false,
+            child: FadeTransition(
+              opacity: _fadeAnim,
+              child: SlideTransition(
+                position: _slideAnim,
+                child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(
                   horizontal: 28.0,
                   vertical: 48.0,
@@ -576,6 +582,7 @@ class _SignInPageState extends State<SignInPage>
             ),
           ),
         ),
+        ],
       ),
     );
   }

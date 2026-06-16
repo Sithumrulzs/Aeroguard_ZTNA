@@ -63,8 +63,6 @@ class _LiveTelemetryPanelState extends State<LiveTelemetryPanel> {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-        final adminNames  = List<String>.from(
-            data['registered_admin_names'] ?? data['active_admin_names'] ?? []);
         final vendorNames = List<String>.from(data['active_vendor_names'] ?? []);
         final lastKnockAt = data['last_knock_at'] as String?;
 
@@ -73,9 +71,7 @@ class _LiveTelemetryPanelState extends State<LiveTelemetryPanel> {
                                 data['active_admins']) as num?)?.toInt() ?? 0;
           _activeVendors    = (data['active_vendors'] as num?)?.toInt() ?? 0;
           _gatewayStatus    = data['gateway_status'] ?? 'SECURED';
-          _registeredLabel  = adminNames.isEmpty
-              ? '$_registeredAdmins · None'
-              : '$_registeredAdmins · ${adminNames.join(', ')}';
+          _registeredLabel  = _registeredAdmins.toString();
           _vendorLabel      = vendorNames.isEmpty
               ? '$_activeVendors · Idle'
               : '$_activeVendors · ${vendorNames.join(', ')}';

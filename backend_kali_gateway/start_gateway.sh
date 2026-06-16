@@ -20,7 +20,7 @@ bash "$SCRIPT_DIR/setup_darkmode.sh"
 # Step 2: Start SPA sniffer in background (must run as root for raw socket)
 echo ""
 echo "[*] Step 2 — Starting SPA knock sniffer (UDP 7777)..."
-python3 "$SCRIPT_DIR/spa_sniffer.py" &
+python3 -u "$SCRIPT_DIR/spa_sniffer.py" &
 SNIFFER_PID=$!
 echo "    sniffer PID: $SNIFFER_PID"
 

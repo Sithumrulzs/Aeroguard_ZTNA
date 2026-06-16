@@ -15,7 +15,10 @@ from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
 import bcrypt
+import json
 import os
+import urllib.request
+import urllib.parse
 import uvicorn
 
 # ── Load environment ──────────────────────────────────────────────────────────
@@ -577,43 +580,106 @@ async def revoke_vendor(payload: RevokeVendorPayload, request: Request):
         raise HTTPException(status_code=500, detail=f"Revoke failed: {e}")
 
 
+def _reverse_geocode(lat: float, lng: float) -> str:
+    """
+    Convert coordinates to a street-level address via OpenStreetMap Nominatim.
+    zoom=18 = building level (most precise). Falls back to raw coords on error.
+    """
+    try:
+        params = urllib.parse.urlencode({
+            "lat": lat, "lon": lng,
+            "format": "json",
+            "zoom": 18,
+            "addressdetails": 1,
+        })
+        req = urllib.request.Request(
+            f"https://nominatim.openstreetmap.org/reverse?{params}",
+            headers={"User-Agent": "AeroGuard-ZTNA/1.0 (security-platform)"},
+        )
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode())
+
+        addr = data.get("address", {})
+        parts = []
+
+        # Building / house number + road
+        road = (addr.get("road") or addr.get("pedestrian")
+                or addr.get("footway") or addr.get("path"))
+        if road:
+            house = addr.get("house_number", "")
+            parts.append(f"{house} {road}".strip() if house else road)
+
+        # Neighbourhood / suburb / quarter
+        area = (addr.get("neighbourhood") or addr.get("suburb")
+                or addr.get("quarter") or addr.get("city_district"))
+        if area:
+            parts.append(area)
+
+        # City / town / village
+        city = (addr.get("city") or addr.get("town")
+                or addr.get("village") or addr.get("municipality"))
+        if city:
+            parts.append(city)
+
+        # Postal code
+        if addr.get("postcode"):
+            parts.append(addr["postcode"])
+
+        # State + country
+        if addr.get("state"):
+            parts.append(addr["state"])
+        if addr.get("country"):
+            parts.append(addr["country"])
+
+        return ", ".join(parts) if parts else data.get("display_name", f"{lat:.6f}, {lng:.6f}")
+
+    except Exception:
+        return f"{lat:.6f}° N, {lng:.6f}° E"
+
+
 @app.post("/api/v1/auth/update-location")
 async def update_user_location(payload: LocationUpdatePayload):
+    location_name = _reverse_geocode(payload.latitude, payload.longitude)
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """UPDATE public.users
-                       SET last_seen_lat = %s,
-                           last_seen_lng = %s,
-                           last_seen_at  = %s
+                       SET last_seen_lat      = %s,
+                           last_seen_lng      = %s,
+                           last_seen_at       = %s,
+                           last_seen_location = %s
                        WHERE username = %s""",
                     (payload.latitude, payload.longitude,
-                     datetime.now(timezone.utc).isoformat(), payload.username)
+                     datetime.now(timezone.utc).isoformat(),
+                     location_name, payload.username)
                 )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Location update failed: {e}")
-    return {"status": "ok"}
+    return {"status": "ok", "location": location_name}
 
 
 @app.post("/api/v1/vendor/update-location")
 async def update_vendor_location(payload: VendorLocationPayload):
-    """Records GPS coordinates captured at QR scan time against the vendor session."""
+    """Records GPS coordinates + resolved address against the vendor session."""
+    location_name = _reverse_geocode(payload.latitude, payload.longitude)
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """UPDATE public.vendor_sessions
-                       SET last_seen_lat = %s,
-                           last_seen_lng = %s,
-                           last_seen_at  = %s
+                       SET last_seen_lat      = %s,
+                           last_seen_lng      = %s,
+                           last_seen_at       = %s,
+                           last_seen_location = %s
                        WHERE qr_token = %s""",
                     (payload.latitude, payload.longitude,
-                     datetime.now(timezone.utc).isoformat(), payload.token_hash)
+                     datetime.now(timezone.utc).isoformat(),
+                     location_name, payload.token_hash)
                 )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Vendor location update failed: {e}")
-    return {"status": "ok"}
+    return {"status": "ok", "location": location_name}
 
 
 @app.get("/health")
