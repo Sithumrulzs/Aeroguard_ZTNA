@@ -752,7 +752,7 @@ async def vendor_device_status(token: str):
             with conn.cursor() as cur:
                 cur.execute(
                     """SELECT status, device_approved, pending_device_ip,
-                              pending_device_mac
+                              pending_device_mac, valid_until
                        FROM public.vendor_sessions
                        WHERE qr_token = %s""",
                     (token,)
@@ -764,7 +764,23 @@ async def vendor_device_status(token: str):
     if not row:
         raise HTTPException(status_code=404, detail="Session not found.")
 
-    if row["device_approved"]:
+    # Check wall-clock expiry so the vendor app navigates back even when the
+    # sniffer's session timer fires but the DB status hasn't been updated yet.
+    try:
+        expiry = datetime.fromisoformat(str(row["valid_until"]).replace("Z", "+00:00"))
+        if datetime.now(timezone.utc) > expiry:
+            return {
+                "status":          "expired",
+                "device_approved": bool(row["device_approved"]),
+                "device_ip":       row["pending_device_ip"] or "",
+                "device_mac":      row["pending_device_mac"] or "",
+            }
+    except Exception:
+        pass
+
+    if row["status"] in ("expired", "revoked"):
+        poll_status = row["status"]
+    elif row["device_approved"]:
         poll_status = "device_approved"
     elif row["pending_device_ip"]:
         poll_status = "pending_device_approval"
