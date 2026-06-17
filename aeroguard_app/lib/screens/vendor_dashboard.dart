@@ -464,7 +464,9 @@ class _VendorDashboardState extends State<VendorDashboard> {
                           const SizedBox(width: 10),
                           Text(
                             _knockStatus == _VKnockStatus.deviceApproved
-                                ? 'DEVICE CONNECTED'
+                                ? (_deviceIp.isNotEmpty
+                                    ? 'CONNECTED  ·  $_deviceIp'
+                                    : 'DEVICE CONNECTED')
                                 : _knockStatus == _VKnockStatus.deviceDenied
                                     ? 'DEVICE ACCESS DENIED'
                                     : 'AWAITING DEVICE APPROVAL',
