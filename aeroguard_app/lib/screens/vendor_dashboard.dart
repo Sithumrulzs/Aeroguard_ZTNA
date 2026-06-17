@@ -10,7 +10,7 @@ import '../widgets/vendor_countdown_timer.dart';
 import '../config/transitions.dart';
 import 'sign_in_page.dart';
 
-enum _VKnockStatus { idle, knocking, success, pendingDevice, deviceApproved, failed }
+enum _VKnockStatus { idle, knocking, success, pendingDevice, deviceApproved, deviceDenied, failed }
 
 class VendorDashboard extends StatefulWidget {
   final String vendorName;
@@ -178,19 +178,38 @@ class _VendorDashboardState extends State<VendorDashboard> {
             '${ApiConstants.vendorDeviceStatusEndpoint}?token=${widget.token}');
         final res = await http.get(uri).timeout(const Duration(seconds: 6));
         if (!mounted) return;
+
         if (res.statusCode == 200) {
           final data = jsonDecode(res.body) as Map<String, dynamic>;
-          if (data['device_approved'] == true) {
+          final status    = data['status']          as String? ?? '';
+          final approved  = data['device_approved'] == true;
+          final deviceIp  = data['device_ip']       as String? ?? '';
+
+          if (approved) {
             _devicePollTimer?.cancel();
             setState(() {
               _knockStatus = _VKnockStatus.deviceApproved;
-              _deviceIp = data['device_ip'] as String? ?? '';
+              _deviceIp = deviceIp;
             });
-          } else if (data['status'] == 'pending_device_approval') {
+          } else if (status == 'pending_device_approval') {
             if (_knockStatus != _VKnockStatus.pendingDevice) {
               setState(() => _knockStatus = _VKnockStatus.pendingDevice);
             }
+          } else if (status == 'expired' || status == 'revoked') {
+            // Session ended — send vendor back to sign-in
+            _devicePollTimer?.cancel();
+            if (mounted) {
+              Navigator.pushReplacement(context, fadeRoute(const SignInPage()));
+            }
+          } else if (status == 'active' &&
+              _knockStatus == _VKnockStatus.pendingDevice &&
+              deviceIp.isEmpty) {
+            // Admin denied: pending_device_ip was cleared back to NULL
+            _devicePollTimer?.cancel();
+            setState(() => _knockStatus = _VKnockStatus.deviceDenied);
           }
+        } else if (res.statusCode == 404) {
+          _devicePollTimer?.cancel();
         }
       } catch (_) {}
     });
@@ -200,6 +219,7 @@ class _VendorDashboardState extends State<VendorDashboard> {
     _VKnockStatus.success        => const Color(0xFF10B981),
     _VKnockStatus.pendingDevice  => Colors.orangeAccent,
     _VKnockStatus.deviceApproved => const Color(0xFF10B981),
+    _VKnockStatus.deviceDenied   => const Color(0xFFEF4444),
     _VKnockStatus.failed         => const Color(0xFFEF4444),
     _                            => Colors.orangeAccent,
   };
@@ -210,6 +230,7 @@ class _VendorDashboardState extends State<VendorDashboard> {
     _VKnockStatus.success        => 'TUNNEL ACTIVE — CONNECTING DEVICE...',
     _VKnockStatus.pendingDevice  => 'AWAITING ADMIN DEVICE APPROVAL',
     _VKnockStatus.deviceApproved => 'DEVICE APPROVED',
+    _VKnockStatus.deviceDenied   => 'DEVICE ACCESS DENIED BY ADMIN',
     _VKnockStatus.failed         => 'ACCESS DENIED',
   };
 
@@ -217,7 +238,8 @@ class _VendorDashboardState extends State<VendorDashboard> {
   Widget build(BuildContext context) {
     final isSuccess = _knockStatus == _VKnockStatus.success ||
         _knockStatus == _VKnockStatus.pendingDevice ||
-        _knockStatus == _VKnockStatus.deviceApproved;
+        _knockStatus == _VKnockStatus.deviceApproved ||
+        _knockStatus == _VKnockStatus.deviceDenied;
 
     return Scaffold(
       backgroundColor: const Color(0xFF050810),
@@ -411,11 +433,15 @@ class _VendorDashboardState extends State<VendorDashboard> {
                       borderRadius: BorderRadius.circular(14),
                       color: _knockStatus == _VKnockStatus.deviceApproved
                           ? const Color(0xFF10B981).withValues(alpha: 0.08)
-                          : Colors.orangeAccent.withValues(alpha: 0.06),
+                          : _knockStatus == _VKnockStatus.deviceDenied
+                              ? const Color(0xFFEF4444).withValues(alpha: 0.08)
+                              : Colors.orangeAccent.withValues(alpha: 0.06),
                       border: Border.all(
                         color: _knockStatus == _VKnockStatus.deviceApproved
                             ? const Color(0xFF10B981).withValues(alpha: 0.40)
-                            : Colors.orangeAccent.withValues(alpha: 0.35),
+                            : _knockStatus == _VKnockStatus.deviceDenied
+                                ? const Color(0xFFEF4444).withValues(alpha: 0.40)
+                                : Colors.orangeAccent.withValues(alpha: 0.35),
                       ),
                     ),
                     child: Center(
@@ -425,21 +451,29 @@ class _VendorDashboardState extends State<VendorDashboard> {
                           Icon(
                             _knockStatus == _VKnockStatus.deviceApproved
                                 ? Icons.check_circle_outline
-                                : Icons.pending_outlined,
+                                : _knockStatus == _VKnockStatus.deviceDenied
+                                    ? Icons.block_outlined
+                                    : Icons.pending_outlined,
                             color: _knockStatus == _VKnockStatus.deviceApproved
                                 ? const Color(0xFF10B981)
-                                : Colors.orangeAccent,
+                                : _knockStatus == _VKnockStatus.deviceDenied
+                                    ? const Color(0xFFEF4444)
+                                    : Colors.orangeAccent,
                             size: 16,
                           ),
                           const SizedBox(width: 10),
                           Text(
                             _knockStatus == _VKnockStatus.deviceApproved
                                 ? 'DEVICE CONNECTED'
-                                : 'AWAITING DEVICE APPROVAL',
+                                : _knockStatus == _VKnockStatus.deviceDenied
+                                    ? 'DEVICE ACCESS DENIED'
+                                    : 'AWAITING DEVICE APPROVAL',
                             style: TextStyle(
                               color: _knockStatus == _VKnockStatus.deviceApproved
                                   ? const Color(0xFF10B981)
-                                  : Colors.orangeAccent,
+                                  : _knockStatus == _VKnockStatus.deviceDenied
+                                      ? const Color(0xFFEF4444)
+                                      : Colors.orangeAccent,
                               fontSize: 12,
                               fontWeight: FontWeight.w800,
                               letterSpacing: 2.5,
@@ -497,6 +531,7 @@ class _VendorKnockButtonState extends State<_VendorKnockButton>
   Color get _color => switch (widget.status) {
     _VKnockStatus.success        => const Color(0xFF10B981),
     _VKnockStatus.deviceApproved => const Color(0xFF10B981),
+    _VKnockStatus.deviceDenied   => const Color(0xFFEF4444),
     _VKnockStatus.failed         => const Color(0xFFEF4444),
     _                            => Colors.orangeAccent,
   };
@@ -605,6 +640,7 @@ class _VendorKnockButtonState extends State<_VendorKnockButton>
                           _VKnockStatus.success        => 'TUNNEL\nACTIVE',
                           _VKnockStatus.pendingDevice  => 'AWAITING\nAPPROVAL',
                           _VKnockStatus.deviceApproved => 'DEVICE\nCONNECTED',
+                          _VKnockStatus.deviceDenied   => 'DEVICE\nDENIED',
                           _VKnockStatus.failed         => 'ACCESS\nDENIED',
                           _VKnockStatus.knocking       => 'CONNECTING\n...',
                           _VKnockStatus.idle           => 'AUTHORIZE\nTUNNEL',
