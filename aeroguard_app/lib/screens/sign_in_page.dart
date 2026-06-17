@@ -274,30 +274,27 @@ class _SignInPageState extends State<SignInPage>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF050810),
-      body: Stack(
-        children: [
-          Positioned.fill(
-            child: Container(
-              decoration: const BoxDecoration(
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF050810), Color(0xFF0A1628)],
-                ),
-              ),
-            ),
+      body: Container(
+        width: double.infinity,
+        height: double.infinity,
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF050810), Color(0xFF0A1628)],
           ),
-          SafeArea(
-            bottom: false,
-            child: FadeTransition(
-              opacity: _fadeAnim,
-              child: SlideTransition(
-                position: _slideAnim,
-                child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(
-                  horizontal: 28.0,
-                  vertical: 48.0,
-                ),
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: FadeTransition(
+            opacity: _fadeAnim,
+            child: SlideTransition(
+              position: _slideAnim,
+              child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 28.0,
+                vertical: 48.0,
+              ),
                 child: Column(
                   children: [
                     // ── Header ──────────────────────────────────────
@@ -534,7 +531,7 @@ class _SignInPageState extends State<SignInPage>
                       ),
                     ),
 
-                    const SizedBox(height: 28),
+                    const SizedBox(height: 52),
 
                     // ── Vendor access ───────────────────────────────
                     GestureDetector(
@@ -564,7 +561,7 @@ class _SignInPageState extends State<SignInPage>
                             ),
                             SizedBox(width: 10),
                             Text(
-                              'VENDOR JIT ACCESS',
+                              'VENDOR ACCESS',
                               style: TextStyle(
                                 color: Colors.orangeAccent,
                                 fontSize: 12,
@@ -576,13 +573,13 @@ class _SignInPageState extends State<SignInPage>
                         ),
                       ),
                     ),
+                    const SizedBox(height: 40),
                   ],
                 ),
               ),
             ),
           ),
         ),
-        ],
       ),
     );
   }
