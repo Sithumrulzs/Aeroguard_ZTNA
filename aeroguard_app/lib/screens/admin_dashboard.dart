@@ -1816,17 +1816,18 @@ class _PendingDevicePanelState extends State<_PendingDevicePanel> {
       [String? overrideIp, String? overrideMac]) async {
     final username = await AuthService.getUsername() ?? 'admin';
     try {
+      final body = <String, dynamic>{
+        'token_hash':     tokenHash,
+        'admin_username': username,
+        'approved':       approved,
+      };
+      if (overrideIp  != null) body['override_ip']  = overrideIp;
+      if (overrideMac != null) body['override_mac'] = overrideMac;
       await http
           .post(
             Uri.parse(ApiConstants.approveVendorDeviceEndpoint),
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'token_hash':    tokenHash,
-              'admin_username': username,
-              'approved':      approved,
-              if (overrideIp  case final ip?)  'override_ip':  ip,
-              if (overrideMac case final mac?) 'override_mac': mac,
-            }),
+            body: jsonEncode(body),
           )
           .timeout(const Duration(seconds: 10));
     } catch (_) {}
