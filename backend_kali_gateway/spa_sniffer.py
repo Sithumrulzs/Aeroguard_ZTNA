@@ -48,10 +48,16 @@ _lock   = threading.Lock()
 _active_phones:  set[str] = set()
 _active_laptops: set[str] = set()
 
+# Map vendor token → IP so the revocation watcher can remove rules by token
+_vendor_phone_map:  dict[str, str] = {}   # token_hash → phone_ip
+_vendor_laptop_map: dict[str, str] = {}   # token_hash → laptop_ip
+
 
 def _cleanup_all():
     """Remove every iptables rule this process injected. Called on exit."""
     print("\n[*] SHUTDOWN — flushing all injected firewall rules...")
+    _vendor_phone_map.clear()
+    _vendor_laptop_map.clear()
     for ip in list(_active_phones):
         _remove(ip)
     for ip in list(_active_laptops):
@@ -297,6 +303,7 @@ def _poll_for_approval(token_hash: str, vendor_name: str,
                 approved_ip = row["pending_device_ip"] or device_ip
                 remaining   = max(int(deadline - time.time()), 60)
                 _inject_laptop(approved_ip)
+                _vendor_laptop_map[token_hash] = approved_ip
                 _schedule_laptop(approved_ip, remaining, vendor_name)
                 _log("VENDOR_DEVICE", vendor_name, "APPROVED", approved_ip,
                      {"token": token_hash[:12] + "...", "remaining_seconds": remaining})
@@ -489,6 +496,7 @@ def _vendor_knock(ip: str, d: dict):
 
     # ── Grant phone access to GATEWAY_PORT ───────────────────────────────────
     _inject(ip)
+    _vendor_phone_map[token_hash] = ip
     _schedule(ip, timeout, vendor_name)
     _log("VENDOR_KNOCK_SPA", vendor_name, "GRANTED", ip,
          {"company": session["company_name"], "session_seconds": timeout})
@@ -518,8 +526,54 @@ def _on_packet(pkt):
         _admin_knock(client_ip, data)
 
 
+# ── Vendor session revocation watcher ────────────────────────────────────────
+def _revocation_watcher():
+    """Poll DB every 20s for vendor sessions manually revoked by admin.
+    Cancels the session timer and removes iptables + conntrack rules immediately
+    so access is cut before the natural expiry timer fires."""
+    while True:
+        time.sleep(20)
+        if not _vendor_phone_map:
+            continue
+        try:
+            tokens = list(_vendor_phone_map.keys())
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """SELECT qr_token FROM public.vendor_sessions
+                           WHERE status IN ('revoked', 'expired')
+                             AND qr_token = ANY(%s)""",
+                        (tokens,)
+                    )
+                    revoked_tokens = [r["qr_token"] for r in cur.fetchall()]
+        except Exception as e:
+            print(f"[-] Revocation watcher DB error: {e}")
+            continue
+
+        for token in revoked_tokens:
+            phone_ip  = _vendor_phone_map.pop(token, None)
+            laptop_ip = _vendor_laptop_map.pop(token, None)
+
+            if phone_ip and phone_ip in _active_phones:
+                with _lock:
+                    t = _timers.pop(phone_ip, None)
+                    if t:
+                        t.cancel()
+                _remove(phone_ip)
+                print(f"[!] VENDOR REVOKED  phone {phone_ip} — admin cut access")
+
+            if laptop_ip and laptop_ip in _active_laptops:
+                with _lock:
+                    t = _timers.pop(f"laptop:{laptop_ip}", None)
+                    if t:
+                        t.cancel()
+                _remove_laptop(laptop_ip)
+                print(f"[!] VENDOR REVOKED  laptop {laptop_ip} — admin cut access")
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    threading.Thread(target=_revocation_watcher, daemon=True).start()
     print("\n" + "=" * 60)
     print(f"AeroGuard SPA Sniffer  —  UDP {UDP_KNOCK_PORT} on {IFACE}")
     print(f"Gateway IP   : {GATEWAY_IP}")

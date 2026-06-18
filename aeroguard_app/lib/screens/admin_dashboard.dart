@@ -25,6 +25,7 @@ class AdminDashboard extends StatefulWidget {
 class _AdminDashboardState extends State<AdminDashboard>
     with SingleTickerProviderStateMixin {
   int _index = 0;
+  final _overviewKey = GlobalKey<_OverviewTabState>();
 
   late AnimationController _tabCtrl;
   late Animation<double>   _tabFade;
@@ -62,9 +63,9 @@ class _AdminDashboardState extends State<AdminDashboard>
         child: IndexedStack(
           index: _index,
           children: [
-            _OverviewTab(onLogout: _logout),
+            _OverviewTab(key: _overviewKey, onLogout: _logout),
             const _AccessTab(),
-            const _VaultTab(),
+            _VaultTab(onVendorRevoked: () => _overviewKey.currentState?._fetchStats()),
           ],
         ),
       ),
@@ -204,7 +205,7 @@ class _NavItem extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 class _OverviewTab extends StatefulWidget {
   final VoidCallback onLogout;
-  const _OverviewTab({required this.onLogout});
+  const _OverviewTab({super.key, required this.onLogout});
 
   @override
   State<_OverviewTab> createState() => _OverviewTabState();
@@ -1273,7 +1274,8 @@ class _KnockButtonState extends State<_KnockButton>
 // TAB 3 — VAULT
 // ─────────────────────────────────────────────────────────────────────────────
 class _VaultTab extends StatefulWidget {
-  const _VaultTab();
+  final VoidCallback? onVendorRevoked;
+  const _VaultTab({this.onVendorRevoked});
 
   @override
   State<_VaultTab> createState() => _VaultTabState();
@@ -1377,6 +1379,7 @@ class _VaultTabState extends State<_VaultTab> {
           margin: const EdgeInsets.all(16),
         ));
         _fetchVaultData();
+        widget.onVendorRevoked?.call();
       }
     } catch (_) {
       if (mounted) {
@@ -1809,7 +1812,8 @@ class _PendingDevicePanelState extends State<_PendingDevicePanel> {
     } catch (_) {}
   }
 
-  Future<void> _action(String tokenHash, bool approved) async {
+  Future<void> _action(String tokenHash, bool approved,
+      [String? overrideIp, String? overrideMac]) async {
     final username = await AuthService.getUsername() ?? 'admin';
     try {
       await http
@@ -1817,9 +1821,11 @@ class _PendingDevicePanelState extends State<_PendingDevicePanel> {
             Uri.parse(ApiConstants.approveVendorDeviceEndpoint),
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode({
-              'token_hash': tokenHash,
+              'token_hash':    tokenHash,
               'admin_username': username,
-              'approved': approved,
+              'approved':      approved,
+              if (overrideIp  case final ip?)  'override_ip':  ip,
+              if (overrideMac case final mac?) 'override_mac': mac,
             }),
           )
           .timeout(const Duration(seconds: 10));
@@ -1872,7 +1878,8 @@ class _PendingDeviceCard extends StatefulWidget {
   final String deviceIp;
   final String deviceMac;
   final String tokenHash;
-  final Future<void> Function(String token, bool approved) onAction;
+  final Future<void> Function(String token, bool approved,
+      [String? overrideIp, String? overrideMac]) onAction;
 
   const _PendingDeviceCard({
     required this.vendorName,
@@ -1888,12 +1895,32 @@ class _PendingDeviceCard extends StatefulWidget {
 }
 
 class _PendingDeviceCardState extends State<_PendingDeviceCard> {
-  bool _processing = false;
+  bool    _processing  = false;
+  String? _overrideIp;
+  String? _overrideMac;
 
   Future<void> _handle(bool approved) async {
     setState(() => _processing = true);
-    await widget.onAction(widget.tokenHash, approved);
+    await widget.onAction(widget.tokenHash, approved, _overrideIp, _overrideMac);
     if (mounted) setState(() => _processing = false);
+  }
+
+  Future<void> _scanNetwork() async {
+    final picked = await showModalBottomSheet<Map<String, String>>(
+      context: context,
+      backgroundColor: const Color(0xFF0D1421),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      isScrollControlled: true,
+      builder: (_) => const _NetworkScanSheet(),
+    );
+    if (picked != null && mounted) {
+      setState(() {
+        _overrideIp  = picked['ip'];
+        _overrideMac = picked['mac'];
+      });
+    }
   }
 
   @override
@@ -1972,15 +1999,60 @@ class _PendingDeviceCardState extends State<_PendingDeviceCard> {
             ],
           ),
           const SizedBox(height: 14),
-          // Device info chips
+          // Device info — shows override selection if admin picked from scan
           Row(
             children: [
-              _DeviceInfoChip(label: 'IP', value: widget.deviceIp),
+              _DeviceInfoChip(label: 'IP',  value: _overrideIp  ?? widget.deviceIp),
               const SizedBox(width: 8),
               Expanded(
-                child: _DeviceInfoChip(label: 'MAC', value: widget.deviceMac),
+                child: _DeviceInfoChip(label: 'MAC', value: _overrideMac ?? widget.deviceMac),
               ),
             ],
+          ),
+          if (_overrideIp != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 5),
+              child: Text(
+                'OVERRIDE SELECTED',
+                style: TextStyle(
+                  color: Colors.cyanAccent.withValues(alpha: 0.75),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.5,
+                ),
+              ),
+            ),
+          const SizedBox(height: 10),
+          // Scan network button
+          GestureDetector(
+            onTap: _scanNetwork,
+            child: Container(
+              width: double.infinity,
+              height: 34,
+              decoration: BoxDecoration(
+                color: Colors.cyanAccent.withValues(alpha: 0.05),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: Colors.cyanAccent.withValues(alpha: 0.25)),
+              ),
+              child: const Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.wifi_find_rounded, color: Colors.cyanAccent, size: 13),
+                    SizedBox(width: 6),
+                    Text(
+                      'SCAN NETWORK',
+                      style: TextStyle(
+                        color: Colors.cyanAccent,
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ),
           const SizedBox(height: 14),
           // Deny / Approve buttons
@@ -2054,6 +2126,184 @@ class _PendingDeviceCardState extends State<_PendingDeviceCard> {
                   ],
                 ),
         ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NETWORK SCAN BOTTOM SHEET
+// ─────────────────────────────────────────────────────────────────────────────
+class _NetworkScanSheet extends StatefulWidget {
+  const _NetworkScanSheet();
+
+  @override
+  State<_NetworkScanSheet> createState() => _NetworkScanSheetState();
+}
+
+class _NetworkScanSheetState extends State<_NetworkScanSheet> {
+  bool   _loading = true;
+  String? _error;
+  List<Map<String, dynamic>> _devices = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _scan();
+  }
+
+  Future<void> _scan() async {
+    setState(() { _loading = true; _error = null; });
+    try {
+      final res = await http
+          .get(Uri.parse(ApiConstants.networkScanEndpoint))
+          .timeout(const Duration(seconds: 8));
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        setState(() {
+          _devices = List<Map<String, dynamic>>.from(data['devices'] ?? []);
+          _loading = false;
+        });
+      } else {
+        setState(() { _error = 'Scan failed (${res.statusCode})'; _loading = false; });
+      }
+    } catch (_) {
+      if (mounted) setState(() { _error = 'Gateway unreachable'; _loading = false; });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Header
+            Row(
+              children: [
+                const Icon(Icons.wifi_find_rounded, color: Colors.cyanAccent, size: 16),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'NETWORK DEVICES',
+                    style: TextStyle(
+                      color: Colors.cyanAccent,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 2.0,
+                    ),
+                  ),
+                ),
+                if (!_loading)
+                  GestureDetector(
+                    onTap: _scan,
+                    child: const Icon(Icons.refresh_rounded,
+                        color: Color(0xFF64748B), size: 18),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            const Text(
+              'Tap a device to select it as the vendor laptop',
+              style: TextStyle(color: Color(0xFF475569), fontSize: 11),
+            ),
+            const SizedBox(height: 14),
+            Divider(color: Colors.white.withValues(alpha: 0.06), height: 1),
+            const SizedBox(height: 12),
+            // Content
+            if (_loading)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 24),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      CircularProgressIndicator(
+                        strokeWidth: 1.5,
+                        valueColor:
+                            AlwaysStoppedAnimation<Color>(Colors.cyanAccent),
+                      ),
+                      SizedBox(height: 12),
+                      Text('Scanning subnet...',
+                          style: TextStyle(
+                              color: Color(0xFF64748B), fontSize: 12)),
+                    ],
+                  ),
+                ),
+              )
+            else if (_error != null)
+              Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  child: Text(_error!,
+                      style: const TextStyle(
+                          color: Color(0xFFEF4444), fontSize: 12)),
+                ),
+              )
+            else if (_devices.isEmpty)
+              const Center(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  child: Text('No devices found — try refreshing',
+                      style: TextStyle(
+                          color: Color(0xFF64748B), fontSize: 12)),
+                ),
+              )
+            else
+              ...(_devices.map((d) {
+                final ip  = d['ip']  as String? ?? '—';
+                final mac = d['mac'] as String? ?? '—';
+                return GestureDetector(
+                  onTap: () =>
+                      Navigator.pop(context, {'ip': ip, 'mac': mac}),
+                  child: Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 8),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: Colors.cyanAccent.withValues(alpha: 0.04),
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: Colors.cyanAccent.withValues(alpha: 0.15)),
+                    ),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.computer_rounded,
+                            color: Color(0xFF64748B), size: 14),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(ip,
+                                  style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w700,
+                                      letterSpacing: 0.5)),
+                              const SizedBox(height: 2),
+                              Text(mac,
+                                  style: const TextStyle(
+                                      color: Color(0xFF64748B),
+                                      fontSize: 10,
+                                      letterSpacing: 0.5)),
+                            ],
+                          ),
+                        ),
+                        const Icon(Icons.arrow_forward_ios_rounded,
+                            color: Color(0xFF334155), size: 12),
+                      ],
+                    ),
+                  ),
+                );
+              }).toList()),
+          ],
+        ),
       ),
     );
   }

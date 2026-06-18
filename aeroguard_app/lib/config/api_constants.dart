@@ -9,6 +9,7 @@ class ApiConstants {
   static const String knockEndpoint = "$baseUrl/knock";
   static const String vendorKnockEndpoint = "$baseUrl/vendor_knock";
   static const String revokeAdminSessionEndpoint = "$baseUrl/revoke-admin-session";
+  static const String networkScanEndpoint         = "$baseUrl/network/scan";
 
   // ——— Central Auth – vendor provisioning (cloud, works off-network) ———
 

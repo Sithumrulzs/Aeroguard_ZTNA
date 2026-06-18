@@ -186,20 +186,54 @@ class _VendorDashboardState extends State<VendorDashboard> {
           final deviceIp  = data['device_ip']       as String? ?? '';
 
           if (approved) {
-            _devicePollTimer?.cancel();
-            setState(() {
-              _knockStatus = _VKnockStatus.deviceApproved;
-              _deviceIp = deviceIp;
-            });
+            // Keep timer running — we still poll so revocation is detected later
+            if (_knockStatus != _VKnockStatus.deviceApproved) {
+              setState(() {
+                _knockStatus = _VKnockStatus.deviceApproved;
+                _deviceIp = deviceIp;
+              });
+            }
           } else if (status == 'pending_device_approval') {
             if (_knockStatus != _VKnockStatus.pendingDevice) {
               setState(() => _knockStatus = _VKnockStatus.pendingDevice);
             }
           } else if (status == 'expired' || status == 'revoked') {
-            // Session ended — send vendor back to sign-in
             _devicePollTimer?.cancel();
             if (mounted) {
-              Navigator.pushReplacement(context, fadeRoute(const SignInPage()));
+              await showDialog(
+                context: context,
+                barrierDismissible: false,
+                builder: (ctx) => AlertDialog(
+                  backgroundColor: const Color(0xFF0D1421),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(20)),
+                  title: const Text(
+                    'SESSION TERMINATED',
+                    style: TextStyle(
+                        color: Color(0xFFEF4444),
+                        fontSize: 13,
+                        letterSpacing: 2.0,
+                        fontWeight: FontWeight.bold),
+                  ),
+                  content: const Text(
+                    'Your access session has been revoked by the administrator. You will be logged out.',
+                    style: TextStyle(
+                        color: Color(0xFF94A3B8), fontSize: 13, height: 1.5),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('OK',
+                          style: TextStyle(
+                              color: Color(0xFFEF4444), letterSpacing: 1.0)),
+                    ),
+                  ],
+                ),
+              );
+              if (mounted) {
+                Navigator.pushReplacement(
+                    context, fadeRoute(const SignInPage()));
+              }
             }
           } else if (status == 'active' &&
               _knockStatus == _VKnockStatus.pendingDevice &&

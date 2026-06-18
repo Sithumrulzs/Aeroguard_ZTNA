@@ -341,6 +341,29 @@ async def revoke_admin_session(payload: RevokeAdminPayload, request: Request):
     return {"status": "revoked", "phone_ip": phone_ip, "laptop_ip": laptop_ip}
 
 
+@app.get("/api/v1/network/scan")
+def scan_network_devices():
+    """
+    ARP-scan the local subnet and return every live device.
+    Uses the kernel ARP cache (/proc/net/arp) — fast, root-only, no extra tools.
+    Only complete entries (flag 0x2) are returned so stale MACs are excluded.
+    """
+    devices = []
+    try:
+        with open("/proc/net/arp") as f:
+            for line in f.readlines()[1:]:          # skip header row
+                parts = line.split()
+                if len(parts) < 4:
+                    continue
+                ip, flags, mac = parts[0], parts[2], parts[3]
+                if flags == "0x2" and mac != "00:00:00:00:00:00" \
+                        and not ip.startswith("127."):
+                    devices.append({"ip": ip, "mac": mac})
+    except Exception as e:
+        print(f"[-] Network scan error: {e}")
+    return {"devices": devices, "count": len(devices)}
+
+
 @app.get("/health")
 async def health_check():
     return {"status": "ok", "service": "AeroGuard ZTNA Gateway"}

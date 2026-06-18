@@ -142,6 +142,8 @@ class ApproveVendorDevicePayload(BaseModel):
     token_hash:     str
     admin_username: str
     approved:       bool
+    override_ip:    Optional[str] = None
+    override_mac:   Optional[str] = None
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -744,13 +746,28 @@ async def approve_vendor_device(payload: ApproveVendorDevicePayload, request: Re
         with get_db() as conn:
             with conn.cursor() as cur:
                 if payload.approved:
-                    cur.execute(
-                        """UPDATE public.vendor_sessions
-                           SET device_approved    = TRUE,
-                               device_approved_at = %s
-                           WHERE qr_token = %s""",
-                        (datetime.now(timezone.utc).isoformat(), payload.token_hash)
-                    )
+                    if payload.override_ip:
+                        # Admin manually selected a device — override auto-detected IP/MAC
+                        cur.execute(
+                            """UPDATE public.vendor_sessions
+                               SET device_approved    = TRUE,
+                                   device_approved_at = %s,
+                                   pending_device_ip  = %s,
+                                   pending_device_mac = %s
+                               WHERE qr_token = %s""",
+                            (datetime.now(timezone.utc).isoformat(),
+                             payload.override_ip,
+                             payload.override_mac or '',
+                             payload.token_hash)
+                        )
+                    else:
+                        cur.execute(
+                            """UPDATE public.vendor_sessions
+                               SET device_approved    = TRUE,
+                                   device_approved_at = %s
+                               WHERE qr_token = %s""",
+                            (datetime.now(timezone.utc).isoformat(), payload.token_hash)
+                        )
                 else:
                     # Denial: clear pending fields so vendor can try again
                     cur.execute(
