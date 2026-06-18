@@ -6,6 +6,7 @@ import '../config/api_constants.dart';
 import 'enclave_service.dart';
 import 'location_service.dart';
 
+
 class NetworkService {
   static final Uri _knockUri = Uri.parse(ApiConstants.knockEndpoint);
 
@@ -59,6 +60,24 @@ class NetworkService {
     } catch (e) {
       debugPrint('[-] Gateway unreachable: $e');
       return false;
+    }
+  }
+
+  /// Terminates the admin's active session — removes iptables rules for
+  /// phone + laptop on the gateway. Best-effort: if gateway is already
+  /// offline this silently succeeds so the UI still resets.
+  static Future<void> revokeAdminSession(String username) async {
+    try {
+      await http
+          .post(
+            Uri.parse(ApiConstants.revokeAdminSessionEndpoint),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'username': username}),
+          )
+          .timeout(const Duration(seconds: 5));
+      debugPrint('[*] Admin session revoked on gateway.');
+    } catch (_) {
+      debugPrint('[*] Revoke call failed — gateway likely already offline.');
     }
   }
 }

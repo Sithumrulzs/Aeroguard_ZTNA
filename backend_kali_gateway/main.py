@@ -12,14 +12,16 @@ from contextlib import contextmanager
 from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
+import subprocess
 import json
 import os
 import uvicorn
 
 # ── Environment ───────────────────────────────────────────────────────────────
 load_dotenv()
-DATABASE_URL = os.getenv("DATABASE_URL")
-PORT         = int(os.getenv("PORT", "8000"))
+DATABASE_URL  = os.getenv("DATABASE_URL")
+PORT          = int(os.getenv("PORT",          "8000"))
+GATEWAY_PORT  = int(os.getenv("GATEWAY_PORT",  "8000"))
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL not set. Check backend_kali_gateway/.env")
 
@@ -69,6 +71,9 @@ class VendorKnockPayload(BaseModel):
     vendor_name: str
     latitude:    float | None = None
     longitude:   float | None = None
+
+class RevokeAdminPayload(BaseModel):
+    username: str
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -265,6 +270,75 @@ async def vendor_knock(payload: VendorKnockPayload, request: Request):
         "valid_until": str(valid_until),
         "bound_ip":    client_ip,
     }
+
+
+@app.post("/api/v1/revoke-admin-session")
+async def revoke_admin_session(payload: RevokeAdminPayload, request: Request):
+    """
+    Called by the admin app when the knock button is tapped while connected.
+    Removes the admin phone's port-specific rules AND the laptop's full-access
+    rules from iptables, then flushes conntrack so the DROP policy takes effect
+    immediately with no ESTABLISHED/RELATED bypass.
+    """
+    phone_ip = request.client.host
+
+    # ── Phone rules ───────────────────────────────────────────────────────────
+    subprocess.run(
+        ["iptables", "-D", "INPUT", "-s", phone_ip, "-p", "tcp",
+         "--dport", str(GATEWAY_PORT), "-j", "ACCEPT"],
+        capture_output=True,
+    )
+    subprocess.run(
+        ["iptables", "-t", "nat", "-D", "PREROUTING", "-s", phone_ip,
+         "-p", "tcp", "--dport", str(GATEWAY_PORT),
+         "-j", "DNAT", "--to-destination", f"127.0.0.1:{GATEWAY_PORT}"],
+        capture_output=True,
+    )
+
+    # ── Laptop rules — look up most recent LAPTOP_ACCESS grant ───────────────
+    laptop_ip = None
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT client_ip FROM public.audit_logs
+                       WHERE event_type = 'LAPTOP_ACCESS'
+                         AND username   = %s
+                         AND status     = 'GRANTED'
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (payload.username,)
+                )
+                row = cur.fetchone()
+        if row:
+            laptop_ip = row["client_ip"]
+    except Exception as e:
+        print(f"[-] Revoke — DB lookup failed: {e}")
+
+    if laptop_ip:
+        subprocess.run(
+            ["iptables", "-D", "INPUT",   "-s", laptop_ip, "-j", "ACCEPT"],
+            capture_output=True,
+        )
+        subprocess.run(
+            ["iptables", "-D", "FORWARD", "-s", laptop_ip, "-j", "ACCEPT"],
+            capture_output=True,
+        )
+        subprocess.run(
+            ["iptables", "-D", "FORWARD", "-d", laptop_ip, "-j", "ACCEPT"],
+            capture_output=True,
+        )
+        subprocess.run(["conntrack", "-D", "-s", laptop_ip], capture_output=True)
+        subprocess.run(["conntrack", "-D", "-d", laptop_ip], capture_output=True)
+
+    subprocess.run(["conntrack", "-D", "-s", phone_ip], capture_output=True)
+    subprocess.run(["conntrack", "-D", "-d", phone_ip], capture_output=True)
+
+    log_audit("ADMIN_REVOKE", payload.username, "REVOKED", phone_ip,
+              {"laptop_ip": laptop_ip, "via": "manual_close"})
+    print(f"[!] ADMIN REVOKED  {payload.username} @ {phone_ip}"
+          f"{f' | laptop {laptop_ip}' if laptop_ip else ''}")
+
+    return {"status": "revoked", "phone_ip": phone_ip, "laptop_ip": laptop_ip}
 
 
 @app.get("/health")

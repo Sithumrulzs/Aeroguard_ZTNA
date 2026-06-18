@@ -8,6 +8,7 @@ class ApiConstants {
   static const int    udpKnockPort  = 7777;
   static const String knockEndpoint = "$baseUrl/knock";
   static const String vendorKnockEndpoint = "$baseUrl/vendor_knock";
+  static const String revokeAdminSessionEndpoint = "$baseUrl/revoke-admin-session";
 
   // ——— Central Auth – vendor provisioning (cloud, works off-network) ———
 
@@ -25,6 +26,8 @@ class ApiConstants {
 
   static const String dashboardStatsEndpoint =
       "$centralAuthUrl/api/v1/dashboard/stats";
+  static const String gatewayThreatsEndpoint =
+      "$centralAuthUrl/api/v1/dashboard/threats";
   static const String dashboardTelemetryEndpoint =
       "$centralAuthUrl/api/v1/dashboard/telemetry";
   static const String vendorSessionsEndpoint =

@@ -396,26 +396,52 @@ class _GatewayStatusCard extends StatefulWidget {
   State<_GatewayStatusCard> createState() => _GatewayStatusCardState();
 }
 
-class _GatewayStatusCardState extends State<_GatewayStatusCard> {
-  Timer? _timer;
-  bool? _online;   // null = checking
-  bool? _secured;  // null = unknown, true = dark-mode active, false = visible
+class _GatewayStatusCardState extends State<_GatewayStatusCard>
+    with SingleTickerProviderStateMixin {
+  Timer? _gwTimer;
+  Timer? _threatTimer;
+  bool? _online;
+  bool? _secured;
+
+  int     _threatCount    = 0;
+  String? _lastThreatIp;
+  String? _lastThreatType;
+  DateTime? _lastThreatAt;
+
+  late AnimationController _glowCtrl;
+  late Animation<double>   _glowAnim;
+
+  bool get _isThreat =>
+      _online == true &&
+      _threatCount > 0 &&
+      _lastThreatAt != null &&
+      DateTime.now().difference(_lastThreatAt!).inSeconds < 120;
 
   @override
   void initState() {
     super.initState();
+    _glowCtrl = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+    _glowAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _glowCtrl, curve: Curves.easeInOut),
+    );
     _checkGateway();
-    _timer = Timer.periodic(const Duration(seconds: 20), (_) => _checkGateway());
+    _checkThreats();
+    _gwTimer     = Timer.periodic(const Duration(seconds: 20), (_) => _checkGateway());
+    _threatTimer = Timer.periodic(const Duration(seconds: 8),  (_) => _checkThreats());
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
+    _gwTimer?.cancel();
+    _threatTimer?.cancel();
+    _glowCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _checkGateway() async {
-    // ── 1. HTTP health check → ONLINE / OFFLINE ───────────────────────────
     bool online = false;
     try {
       final res = await http
@@ -426,27 +452,20 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
       online = false;
     }
 
-    // ── 2. TCP probe on a non-knock port → SECURED / UNSECURED ───────────
-    // Dark mode (DROP policy): connection times out          → SECURED
-    // No dark mode (REJECT/open): connection refused/instant → UNSECURED
     bool? secured;
     if (online) {
       try {
         final socket = await Socket.connect(
-          ApiConstants.gatewayIp,
-          9999,
+          ApiConstants.gatewayIp, 9999,
           timeout: const Duration(seconds: 2),
         );
         socket.destroy();
-        secured = false; // connected → something answered → UNSECURED
+        secured = false;
       } on SocketException catch (e) {
         final code = e.osError?.errorCode;
-        // ECONNREFUSED (111 on Linux/Android) → host responded → UNSECURED
-        if (code == 111 || e.message.toLowerCase().contains('refused')) {
-          secured = false;
-        } else {
-          secured = true; // timeout / no response → DROP rule active → SECURED
-        }
+        secured = (code == 111 || e.message.toLowerCase().contains('refused'))
+            ? false
+            : true;
       } catch (_) {
         secured = true;
       }
@@ -455,43 +474,99 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
     if (mounted) setState(() { _online = online; _secured = secured; });
   }
 
+  Future<void> _checkThreats() async {
+    try {
+      final res = await http
+          .get(Uri.parse(ApiConstants.gatewayThreatsEndpoint))
+          .timeout(const Duration(seconds: 6));
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        final count = (data['recent_count'] as int?) ?? 0;
+        DateTime? lastAt;
+        final lastAtStr = data['last_threat_at'] as String?;
+        if (lastAtStr != null) {
+          try { lastAt = DateTime.parse(lastAtStr).toLocal(); } catch (_) {}
+        }
+        setState(() {
+          _threatCount   = count;
+          _lastThreatAt  = lastAt;
+          _lastThreatIp  = data['last_threat_ip']   as String?;
+          _lastThreatType = data['last_threat_type'] as String?;
+        });
+        if (_isThreat && !_glowCtrl.isAnimating) {
+          _glowCtrl.repeat(reverse: true);
+        } else if (!_isThreat && _glowCtrl.isAnimating) {
+          _glowCtrl.stop();
+          _glowCtrl.reset();
+        }
+      }
+    } catch (_) {}
+  }
+
   @override
   Widget build(BuildContext context) {
     final bool checking  = _online == null;
-    final bool isOnline  = _online == true;
-    final bool isSecured = _secured == true;
+    final bool isOffline = _online == false;
+    final bool isThreat  = !checking && !isOffline && _isThreat;
 
-    final Color accent = checking
-        ? const Color(0xFF00C3FF)
-        : isOnline
-            ? (isSecured ? const Color(0xFF10B981) : const Color(0xFFF59E0B))
-            : const Color(0xFFEF4444);
+    Color  accent;
+    String title, subtitle, badge;
 
-    final String title = checking
-        ? 'GATEWAY'
-        : isOnline
-            ? (isSecured ? 'GATEWAY SECURED' : 'GATEWAY UNSECURED')
-            : 'GATEWAY OFFLINE';
+    if (checking) {
+      accent   = const Color(0xFF00C3FF);
+      title    = 'GATEWAY';
+      subtitle = 'Checking...';
+      badge    = '···';
+    } else if (isOffline) {
+      accent   = const Color(0xFFEAB308); // yellow
+      title    = 'GATEWAY OFFLINE';
+      subtitle = 'Not reachable';
+      badge    = 'OFFLINE';
+    } else if (isThreat) {
+      accent   = const Color(0xFFEF4444); // red
+      title    = 'THREAT DETECTED';
+      final reason = _lastThreatType?.replaceFirst('DENIED - ', '') ?? 'Unauthorized attempt';
+      subtitle = '$reason · ${_lastThreatIp ?? 'unknown'}';
+      badge    = 'THREAT';
+    } else if (_secured == false) {
+      accent   = const Color(0xFFF59E0B); // amber
+      title    = 'GATEWAY UNSECURED';
+      subtitle = 'Dark mode inactive';
+      badge    = 'UNSECURED';
+    } else {
+      accent   = const Color(0xFF10B981); // green
+      title    = 'GATEWAY SECURED';
+      subtitle = 'Zero Trust enforced';
+      badge    = 'ONLINE';
+    }
 
-    final String subtitle = checking
-        ? 'Checking...'
-        : isOnline
-            ? (isSecured ? 'Zero Trust enforced' : 'Dark mode inactive')
-            : 'Not reachable';
-
-    final String badge = checking ? '···' : (isOnline ? 'ONLINE' : 'OFFLINE');
-
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D1421),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: accent.withValues(alpha: 0.40), width: 1.2),
-        boxShadow: [
-          BoxShadow(color: accent.withValues(alpha: 0.18), blurRadius: 32, spreadRadius: -2),
-        ],
-      ),
+    return AnimatedBuilder(
+      animation: _glowAnim,
+      builder: (context, child) {
+        final g = isThreat ? _glowAnim.value : 0.0;
+        return AnimatedContainer(
+          duration: const Duration(milliseconds: 400),
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+          decoration: BoxDecoration(
+            color: const Color(0xFF0D1421),
+            borderRadius: BorderRadius.circular(20),
+            border: Border.all(
+              color: accent.withValues(alpha: 0.40 + g * 0.35),
+              width: isThreat ? 1.5 : 1.2,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: accent.withValues(alpha: 0.18 + g * 0.28),
+                blurRadius: 32 + g * 28,
+                spreadRadius: -2 + g * 5,
+              ),
+            ],
+          ),
+          child: child,
+        );
+      },
       child: Row(
         children: [
           checking
@@ -502,43 +577,61 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
                     valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF00C3FF)),
                   ),
                 )
-              : _PulsingDot(color: accent),
+              : _PulsingDot(color: _isThreat ? const Color(0xFFEF4444) :
+                  isOffline ? const Color(0xFFEAB308) :
+                  _secured == true ? const Color(0xFF10B981) : const Color(0xFFF59E0B)),
           const SizedBox(width: 14),
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  title,
-                  style: TextStyle(
-                    color: accent,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 2.0,
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  child: Text(
+                    title,
+                    key: ValueKey(title),
+                    style: TextStyle(
+                      color: _isThreat ? const Color(0xFFEF4444) :
+                          isOffline ? const Color(0xFFEAB308) :
+                          _secured == true ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 2.0,
+                    ),
                   ),
                 ),
                 const SizedBox(height: 2),
-                Text(
-                  subtitle,
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.3),
-                    fontSize: 11,
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  child: Text(
+                    subtitle,
+                    key: ValueKey(subtitle),
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.3),
+                      fontSize: 11,
+                    ),
                   ),
                 ),
               ],
             ),
           ),
           const SizedBox(width: 8),
-          Container(
+          AnimatedContainer(
+            duration: const Duration(milliseconds: 400),
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
-              color: accent.withValues(alpha: 0.1),
+              color: (_isThreat ? const Color(0xFFEF4444) :
+                  isOffline ? const Color(0xFFEAB308) :
+                  _secured == true ? const Color(0xFF10B981) : const Color(0xFFF59E0B))
+                  .withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Text(
               badge,
               style: TextStyle(
-                color: accent,
+                color: _isThreat ? const Color(0xFFEF4444) :
+                    isOffline ? const Color(0xFFEAB308) :
+                    _secured == true ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
                 fontSize: 9,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 1.5,
@@ -690,6 +783,8 @@ class _AccessTabState extends State<_AccessTab>
     with SingleTickerProviderStateMixin {
   _KnockStatus _knockStatus = _KnockStatus.idle;
   String _tunnelLabel = 'Standby — Awaiting knock';
+  String _username    = '';
+  Timer? _gatewayPollTimer;
 
   late AnimationController _headerCtrl;
   late Animation<double> _headerFade;
@@ -698,6 +793,7 @@ class _AccessTabState extends State<_AccessTab>
   @override
   void initState() {
     super.initState();
+    _loadUsername();
     _headerCtrl = AnimationController(
       duration: const Duration(milliseconds: 1000),
       vsync: this,
@@ -709,22 +805,61 @@ class _AccessTabState extends State<_AccessTab>
     ).animate(CurvedAnimation(parent: _headerCtrl, curve: Curves.easeOutCubic));
   }
 
+  Future<void> _loadUsername() async {
+    final u = await AuthService.getUsername() ?? '';
+    if (mounted) setState(() => _username = u);
+  }
+
+  /// Polls gateway health every 12s while connected.
+  /// Resets to idle automatically if the gateway goes offline.
+  void _startGatewayPolling() {
+    _gatewayPollTimer?.cancel();
+    _gatewayPollTimer = Timer.periodic(const Duration(seconds: 12), (_) async {
+      if (_knockStatus != _KnockStatus.success) {
+        _gatewayPollTimer?.cancel();
+        return;
+      }
+      bool online = false;
+      try {
+        final res = await http
+            .get(Uri.parse(ApiConstants.gatewayHealthUrl))
+            .timeout(const Duration(seconds: 4));
+        online = res.statusCode == 200;
+      } catch (_) {
+        online = false;
+      }
+      if (!online && mounted && _knockStatus == _KnockStatus.success) {
+        _gatewayPollTimer?.cancel();
+        setState(() {
+          _knockStatus = _KnockStatus.idle;
+          _tunnelLabel = 'Gateway offline — session ended';
+        });
+        await Future.delayed(const Duration(seconds: 3));
+        if (mounted) setState(() => _tunnelLabel = 'Standby — Awaiting knock');
+      }
+    });
+  }
+
   @override
   void dispose() {
     _headerCtrl.dispose();
+    _gatewayPollTimer?.cancel();
     super.dispose();
   }
 
   Future<void> _handleKnock() async {
-    // If gateway is already open, this tap terminates the session
+    // Second tap while connected → terminate session on gateway
     if (_knockStatus == _KnockStatus.success) {
+      _gatewayPollTimer?.cancel();
       setState(() {
         _knockStatus = _KnockStatus.idle;
-        _tunnelLabel = 'Gateway closed — tunnel terminated';
+        _tunnelLabel = 'Terminating session...';
       });
-      await Future.delayed(const Duration(seconds: 2));
+      await NetworkService.revokeAdminSession(_username);
       if (mounted) {
-        setState(() => _tunnelLabel = 'Standby — Awaiting knock');
+        setState(() => _tunnelLabel = 'Gateway closed — tunnel terminated');
+        await Future.delayed(const Duration(seconds: 2));
+        if (mounted) setState(() => _tunnelLabel = 'Standby — Awaiting knock');
       }
       return;
     }
@@ -734,16 +869,18 @@ class _AccessTabState extends State<_AccessTab>
       _tunnelLabel = 'Establishing secure tunnel...';
     });
 
-    final username = await AuthService.getUsername() ?? 'unknown';
+    final username = _username.isNotEmpty
+        ? _username
+        : (await AuthService.getUsername() ?? 'unknown');
     final success = await NetworkService.sendAuthorizationKnock(username);
     if (!mounted) return;
 
     if (success) {
-      // Stay green — gateway remains open until admin taps to terminate
       setState(() {
         _knockStatus = _KnockStatus.success;
         _tunnelLabel = 'Tunnel active — Connection secured';
       });
+      _startGatewayPolling();
     } else {
       setState(() {
         _knockStatus = _KnockStatus.failed;

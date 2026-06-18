@@ -56,6 +56,9 @@ def _cleanup_all():
         _remove(ip)
     for ip in list(_active_laptops):
         _remove_laptop(ip)
+    # Nuclear flush: wipe entire conntrack table so no ESTABLISHED/RELATED
+    # state survives that could let removed IPs bypass the DEFAULT DROP policy.
+    subprocess.run(["conntrack", "-F"], capture_output=True)
     print("[*] Firewall restored to dark mode.")
 
 
@@ -110,6 +113,12 @@ def _inject(client_ip: str):
     print(f"[+] RULES INJECTED  {client_ip} → tcp/{GATEWAY_PORT}")
 
 
+def _flush_conntrack(ip: str):
+    """Remove conntrack entries for an IP so ESTABLISHED/RELATED can't bypass DROP."""
+    subprocess.run(["conntrack", "-D", "-s", ip], capture_output=True)
+    subprocess.run(["conntrack", "-D", "-d", ip], capture_output=True)
+
+
 def _remove(client_ip: str):
     """Remove phone's port-specific iptables rules."""
     subprocess.run(
@@ -123,6 +132,7 @@ def _remove(client_ip: str):
          "-j", "DNAT", "--to-destination", f"127.0.0.1:{GATEWAY_PORT}"],
         capture_output=True,
     )
+    _flush_conntrack(client_ip)
     _active_phones.discard(client_ip)
     print(f"[!] RULES REMOVED   {client_ip} phone session expired")
 
@@ -183,6 +193,7 @@ def _remove_laptop(laptop_ip: str):
         ["iptables", "-D", "FORWARD", "-d", laptop_ip, "-j", "ACCEPT"],
         capture_output=True,
     )
+    _flush_conntrack(laptop_ip)
     _active_laptops.discard(laptop_ip)
     print(f"[!] LAPTOP REMOVED  {laptop_ip} — session expired")
 

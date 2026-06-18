@@ -687,6 +687,33 @@ async def update_vendor_location(payload: VendorLocationPayload):
     return {"status": "ok", "location": location_name}
 
 
+@app.get("/api/v1/dashboard/threats")
+async def get_threats():
+    """Return recent unauthorized knock attempts from the last 2 minutes."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT event_type, username, client_ip, status, created_at
+                       FROM public.audit_logs
+                       WHERE status LIKE 'DENIED%%'
+                         AND created_at > NOW() AT TIME ZONE 'UTC' - INTERVAL '2 minutes'
+                       ORDER BY created_at DESC
+                       LIMIT 20"""
+                )
+                rows = cur.fetchall()
+        threats = [dict(r) for r in rows]
+        last = threats[0] if threats else None
+        return {
+            "recent_count":   len(threats),
+            "last_threat_at": str(last["created_at"]) if last else None,
+            "last_threat_type": last["status"]     if last else None,
+            "last_threat_ip":   last["client_ip"]  if last else None,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+
 @app.get("/api/v1/dashboard/pending-vendor-devices")
 async def get_pending_vendor_devices():
     """Return vendor sessions that have a detected device awaiting admin approval."""
