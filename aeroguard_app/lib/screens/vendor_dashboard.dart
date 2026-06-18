@@ -33,7 +33,9 @@ class VendorDashboard extends StatefulWidget {
 class _VendorDashboardState extends State<VendorDashboard> {
   _VKnockStatus _knockStatus = _VKnockStatus.idle;
   Timer? _devicePollTimer;
-  String _deviceIp = '';
+  String _deviceIp         = '';
+  bool   _pollInFlight     = false;   // prevents overlapping async poll calls
+  bool   _terminating      = false;   // prevents double dialog + navigation
 
   @override
   void dispose() {
@@ -173,31 +175,39 @@ class _VendorDashboardState extends State<VendorDashboard> {
   void _startDevicePolling() {
     _devicePollTimer?.cancel();
     _devicePollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
+      // Skip if a previous call is still in-flight (slow network) or session is
+      // already being terminated to prevent overlapping dialogs / double-pop.
+      if (_pollInFlight || _terminating) return;
+      _pollInFlight = true;
       try {
         final uri = Uri.parse(
             '${ApiConstants.vendorDeviceStatusEndpoint}?token=${widget.token}');
         final res = await http.get(uri).timeout(const Duration(seconds: 6));
-        if (!mounted) return;
+        if (!mounted) { _pollInFlight = false; return; }
 
         if (res.statusCode == 200) {
-          final data = jsonDecode(res.body) as Map<String, dynamic>;
-          final status    = data['status']          as String? ?? '';
-          final approved  = data['device_approved'] == true;
-          final deviceIp  = data['device_ip']       as String? ?? '';
+          final data     = jsonDecode(res.body) as Map<String, dynamic>;
+          final status   = data['status']          as String? ?? '';
+          final approved = data['device_approved'] == true;
+          final deviceIp = data['device_ip']       as String? ?? '';
 
           if (approved) {
-            // Keep timer running — we still poll so revocation is detected later
+            // Keep timer running after approval so we detect future revocation.
             if (_knockStatus != _VKnockStatus.deviceApproved) {
               setState(() {
                 _knockStatus = _VKnockStatus.deviceApproved;
-                _deviceIp = deviceIp;
+                _deviceIp    = deviceIp;
               });
+            } else if (deviceIp.isNotEmpty && _deviceIp != deviceIp) {
+              // IP may have arrived on a later poll (DB write race on first tick)
+              setState(() => _deviceIp = deviceIp);
             }
           } else if (status == 'pending_device_approval') {
             if (_knockStatus != _VKnockStatus.pendingDevice) {
               setState(() => _knockStatus = _VKnockStatus.pendingDevice);
             }
           } else if (status == 'expired' || status == 'revoked') {
+            _terminating = true;
             _devicePollTimer?.cancel();
             if (mounted) {
               await showDialog(
@@ -215,9 +225,11 @@ class _VendorDashboardState extends State<VendorDashboard> {
                         letterSpacing: 2.0,
                         fontWeight: FontWeight.bold),
                   ),
-                  content: const Text(
-                    'Your access session has been revoked by the administrator. You will be logged out.',
-                    style: TextStyle(
+                  content: Text(
+                    status == 'revoked'
+                        ? 'Your access has been revoked by the administrator.'
+                        : 'Your access session has expired.',
+                    style: const TextStyle(
                         color: Color(0xFF94A3B8), fontSize: 13, height: 1.5),
                   ),
                   actions: [
@@ -238,7 +250,7 @@ class _VendorDashboardState extends State<VendorDashboard> {
           } else if (status == 'active' &&
               _knockStatus == _VKnockStatus.pendingDevice &&
               deviceIp.isEmpty) {
-            // Admin denied: pending_device_ip was cleared back to NULL
+            // Admin denied: pending_device_ip cleared to NULL
             _devicePollTimer?.cancel();
             setState(() => _knockStatus = _VKnockStatus.deviceDenied);
           }
@@ -246,6 +258,7 @@ class _VendorDashboardState extends State<VendorDashboard> {
           _devicePollTimer?.cancel();
         }
       } catch (_) {}
+      _pollInFlight = false;
     });
   }
 
@@ -422,10 +435,11 @@ class _VendorDashboardState extends State<VendorDashboard> {
                           VendorCountdownTimer(
                             initialSeconds: _remainingSeconds(),
                             onExpire: () {
-                              if (mounted) {
-                                Navigator.pushReplacement(
-                                    context, fadeRoute(const SignInPage()));
-                              }
+                              if (_terminating || !mounted) return;
+                              _terminating = true;
+                              _devicePollTimer?.cancel();
+                              Navigator.pushReplacement(
+                                  context, fadeRoute(const SignInPage()));
                             },
                           ),
                         ] else
