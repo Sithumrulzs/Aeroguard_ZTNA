@@ -181,6 +181,16 @@ def _inject_laptop(laptop_ip: str):
         ["iptables", "-I", "FORWARD", "1", "-d", laptop_ip, "-j", "ACCEPT"],
         capture_output=True,
     )
+    # main.py only listens on 127.0.0.1 — without this DNAT, INPUT ACCEPT
+    # alone still gets "connection refused" on the gateway's own API/port,
+    # since nothing routes the laptop's traffic to the loopback-bound app.
+    # Needed for the terminal exe's /api/v1/terminal-session polling.
+    subprocess.run(
+        ["iptables", "-t", "nat", "-I", "PREROUTING", "1",
+         "-s", laptop_ip, "-p", "tcp", "--dport", str(GATEWAY_PORT),
+         "-j", "DNAT", "--to-destination", f"127.0.0.1:{GATEWAY_PORT}"],
+        capture_output=True,
+    )
     _active_laptops.add(laptop_ip)
     print(f"[+] LAPTOP ACCESS   {laptop_ip} — full access granted (ping/nmap enabled)")
 
@@ -197,6 +207,12 @@ def _remove_laptop(laptop_ip: str):
     )
     subprocess.run(
         ["iptables", "-D", "FORWARD", "-d", laptop_ip, "-j", "ACCEPT"],
+        capture_output=True,
+    )
+    subprocess.run(
+        ["iptables", "-t", "nat", "-D", "PREROUTING",
+         "-s", laptop_ip, "-p", "tcp", "--dport", str(GATEWAY_PORT),
+         "-j", "DNAT", "--to-destination", f"127.0.0.1:{GATEWAY_PORT}"],
         capture_output=True,
     )
     _flush_conntrack(laptop_ip)

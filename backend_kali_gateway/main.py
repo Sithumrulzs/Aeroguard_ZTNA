@@ -327,6 +327,12 @@ async def revoke_admin_session(payload: RevokeAdminPayload, request: Request):
             ["iptables", "-D", "FORWARD", "-d", laptop_ip, "-j", "ACCEPT"],
             capture_output=True,
         )
+        subprocess.run(
+            ["iptables", "-t", "nat", "-D", "PREROUTING",
+             "-s", laptop_ip, "-p", "tcp", "--dport", str(GATEWAY_PORT),
+             "-j", "DNAT", "--to-destination", f"127.0.0.1:{GATEWAY_PORT}"],
+            capture_output=True,
+        )
         subprocess.run(["conntrack", "-D", "-s", laptop_ip], capture_output=True)
         subprocess.run(["conntrack", "-D", "-d", laptop_ip], capture_output=True)
 
