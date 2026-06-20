@@ -341,6 +341,45 @@ async def revoke_admin_session(payload: RevokeAdminPayload, request: Request):
     return {"status": "revoked", "phone_ip": phone_ip, "laptop_ip": laptop_ip}
 
 
+@app.get("/api/v1/terminal-session")
+def terminal_session(request: Request):
+    """
+    Polled by the operator terminal exe — never pushed to.
+    Reachable at all only once the sniffer has injected an INPUT ACCEPT
+    rule for this exact source IP, so a response here is itself proof
+    of a live, granted laptop session — not a trusted inbound message.
+    """
+    client_ip = request.client.host
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT event_type, status, username, created_at
+                       FROM public.audit_logs
+                       WHERE client_ip = %s
+                         AND event_type IN ('LAPTOP_ACCESS', 'LAPTOP_EXPIRED', 'ADMIN_REVOKE',
+                                             'VENDOR_DEVICE', 'VENDOR_DEVICE_REVOKED')
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (client_ip,)
+                )
+                row = cur.fetchone()
+    except Exception as e:
+        print(f"[-] terminal-session DB error: {e}")
+        return {"active": False}
+
+    granted = row and (
+        (row["event_type"] == "LAPTOP_ACCESS" and row["status"] == "GRANTED") or
+        (row["event_type"] == "VENDOR_DEVICE" and row["status"] == "APPROVED")
+    )
+    if granted:
+        return {
+            "active":     True,
+            "username":   row["username"],
+            "granted_at": str(row["created_at"]),
+        }
+    return {"active": False}
+
+
 @app.get("/api/v1/network/scan")
 def scan_network_devices():
     """

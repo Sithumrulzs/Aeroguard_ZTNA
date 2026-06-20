@@ -7,11 +7,12 @@ a = Analysis(
     ['aeroguard_terminal.py'],
     pathex=['.'],
     binaries=[],
-    datas=[],
+    datas=[('assets', 'assets')],
     hiddenimports=[
         'tkinter', 'tkinter.scrolledtext', 'tkinter.font',
-        'socket', 'threading', 'urllib.request', 'urllib.error',
+        'threading', 'urllib.request', 'urllib.error',
         'sqlite3', 'json', 'webbrowser',
+        'pystray', 'pystray._win32', 'PIL', 'PIL.Image', 'PIL.ImageTk',
     ],
     hookspath=[],
     runtime_hooks=[],
@@ -36,5 +37,5 @@ exe = EXE(
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,      # no black console window — GUI only
-    icon=None,          # replace with 'aeroguard.ico' if you have one
+    icon='assets/aeroguard.ico',
 )

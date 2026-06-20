@@ -108,7 +108,7 @@ class _VendorDashboardState extends State<VendorDashboard> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text(
-              'TUNNEL AUTHORIZED — Vendor session active',
+              'Knock verified — awaiting admin device approval',
               style: TextStyle(
                 color: Colors.black,
                 fontWeight: FontWeight.w600,
@@ -262,9 +262,9 @@ class _VendorDashboardState extends State<VendorDashboard> {
     });
   }
 
+  // success/pendingDevice stay orange — nothing reads as "connected" until
+  // the admin has actually approved this specific device's IP/MAC.
   Color get _statusColor => switch (_knockStatus) {
-    _VKnockStatus.success        => const Color(0xFF10B981),
-    _VKnockStatus.pendingDevice  => Colors.orangeAccent,
     _VKnockStatus.deviceApproved => const Color(0xFF10B981),
     _VKnockStatus.deviceDenied   => const Color(0xFFEF4444),
     _VKnockStatus.failed         => const Color(0xFFEF4444),
@@ -274,7 +274,7 @@ class _VendorDashboardState extends State<VendorDashboard> {
   String get _statusLabel => switch (_knockStatus) {
     _VKnockStatus.idle           => 'TAP TO INITIATE TUNNEL',
     _VKnockStatus.knocking       => 'ESTABLISHING TUNNEL...',
-    _VKnockStatus.success        => 'TUNNEL ACTIVE — CONNECTING DEVICE...',
+    _VKnockStatus.success        => 'VERIFIED — AWAITING DEVICE APPROVAL',
     _VKnockStatus.pendingDevice  => 'AWAITING ADMIN DEVICE APPROVAL',
     _VKnockStatus.deviceApproved => 'DEVICE APPROVED',
     _VKnockStatus.deviceDenied   => 'DEVICE ACCESS DENIED BY ADMIN',
@@ -578,8 +578,10 @@ class _VendorKnockButtonState extends State<_VendorKnockButton>
     super.dispose();
   }
 
+  // Stays orange through success/pendingDevice — only the gateway-confirmed
+  // device approval turns this green, so the button never implies a full
+  // connection before the admin has actually approved this device.
   Color get _color => switch (widget.status) {
-    _VKnockStatus.success        => const Color(0xFF10B981),
     _VKnockStatus.deviceApproved => const Color(0xFF10B981),
     _VKnockStatus.deviceDenied   => const Color(0xFFEF4444),
     _VKnockStatus.failed         => const Color(0xFFEF4444),
@@ -687,7 +689,7 @@ class _VendorKnockButtonState extends State<_VendorKnockButton>
                       const SizedBox(height: 7),
                       Text(
                         switch (widget.status) {
-                          _VKnockStatus.success        => 'TUNNEL\nACTIVE',
+                          _VKnockStatus.success        => 'AWAITING\nAPPROVAL',
                           _VKnockStatus.pendingDevice  => 'AWAITING\nAPPROVAL',
                           _VKnockStatus.deviceApproved => 'DEVICE\nCONNECTED',
                           _VKnockStatus.deviceDenied   => 'DEVICE\nDENIED',

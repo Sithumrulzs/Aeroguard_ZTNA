@@ -1794,17 +1794,24 @@ class _PendingDevicePanelState extends State<_PendingDevicePanel> {
         final data = jsonDecode(res.body) as Map<String, dynamic>;
         final newList =
             List<Map<String, dynamic>>.from(data['pending'] ?? []);
-        // Fire OS notification for newly detected pending devices
-        for (final device in newList) {
-          final token = device['qr_token'] as String? ?? '';
-          if (token.isNotEmpty && !_seenTokens.contains(token)) {
-            _seenTokens.add(token);
-            NotificationService.showVendorDeviceAlert(
-              vendorName: device['vendor_username'] as String? ?? '',
-              company: device['company_name'] as String? ?? '',
-              deviceIp: device['pending_device_ip'] as String? ?? '',
-              deviceMac: device['pending_device_mac'] as String? ?? '',
-            );
+        // Fire an actionable OS notification for newly detected pending
+        // devices — admin can Approve/Decline before it ever reaches the
+        // gateway, without needing to open this panel.
+        if (newList.isNotEmpty) {
+          final adminUsername = await AuthService.getUsername() ?? 'admin';
+          for (final device in newList) {
+            final token = device['qr_token'] as String? ?? '';
+            if (token.isNotEmpty && !_seenTokens.contains(token)) {
+              _seenTokens.add(token);
+              NotificationService.showVendorDeviceAlert(
+                vendorName: device['vendor_username'] as String? ?? '',
+                company: device['company_name'] as String? ?? '',
+                deviceIp: device['pending_device_ip'] as String? ?? '',
+                deviceMac: device['pending_device_mac'] as String? ?? '',
+                tokenHash: token,
+                adminUsername: adminUsername,
+              );
+            }
           }
         }
         setState(() => _pending = newList);

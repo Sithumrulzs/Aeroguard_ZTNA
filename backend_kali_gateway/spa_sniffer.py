@@ -540,17 +540,17 @@ def _revocation_watcher():
             with get_db() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        """SELECT qr_token FROM public.vendor_sessions
+                        """SELECT qr_token, vendor_username FROM public.vendor_sessions
                            WHERE status IN ('revoked', 'expired')
                              AND qr_token = ANY(%s)""",
                         (tokens,)
                     )
-                    revoked_tokens = [r["qr_token"] for r in cur.fetchall()]
+                    revoked = {r["qr_token"]: r["vendor_username"] for r in cur.fetchall()}
         except Exception as e:
             print(f"[-] Revocation watcher DB error: {e}")
             continue
 
-        for token in revoked_tokens:
+        for token, vendor_name in revoked.items():
             phone_ip  = _vendor_phone_map.pop(token, None)
             laptop_ip = _vendor_laptop_map.pop(token, None)
 
@@ -568,6 +568,8 @@ def _revocation_watcher():
                     if t:
                         t.cancel()
                 _remove_laptop(laptop_ip)
+                _log("VENDOR_DEVICE_REVOKED", vendor_name, "REVOKED", laptop_ip,
+                     {"token": token[:12] + "..."})
                 print(f"[!] VENDOR REVOKED  laptop {laptop_ip} — admin cut access")
 
 

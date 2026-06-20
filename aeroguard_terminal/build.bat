@@ -11,8 +11,8 @@ if errorlevel 1 (
     pause & exit /b 1
 )
 
-echo [2/3] Installing PyInstaller...
-pip install pyinstaller --quiet
+echo [2/3] Installing build dependencies...
+pip install pyinstaller pystray Pillow --quiet
 
 echo [3/3] Building AeroGuard_Terminal.exe ...
 pyinstaller aeroguard_terminal.spec --noconfirm --clean
@@ -24,15 +24,13 @@ echo   Output: dist\AeroGuard_Terminal.exe
 echo ================================================================
 echo.
 echo DEPLOYMENT STEPS:
-echo   1. Copy dist\AeroGuard_Terminal.exe to operator workstation
+echo   1. Copy dist\AeroGuard_Terminal.exe to the operator workstation
 echo   2. Copy airport_system.db to the SAME folder as the .exe
-echo   3. Add .exe to Windows Startup so it auto-runs on boot
-echo   4. In your gateway main.py, call:
-echo        from gateway_notifier import notify_terminal
-echo        notify_terminal(client_ip=operator_ip, username=username)
-echo   5. After knock verified, terminal pops up automatically
-echo.
-echo TEST WITHOUT GATEWAY:
-echo   dist\AeroGuard_Terminal.exe --direct
+echo   3. Run it — it starts hidden in the system tray and silently
+echo      polls the gateway. No setup, no Windows Startup entry needed
+echo      to test; add one separately only for a permanent admin box.
+echo   4. The terminal pops to the foreground automatically the
+echo      moment the gateway grants this machine's IP a session —
+echo      nothing needs to be called from the gateway side.
 echo.
 pause

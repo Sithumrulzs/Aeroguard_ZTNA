@@ -1,19 +1,25 @@
 """
-AeroGuard ZTNA - Secure Terminal v4.0
+AeroGuard ZTNA - Secure Terminal v5.0
 Pure terminal interface - type commands, see results.
-Auto-launches after gateway port-knock verification.
+Polls the gateway for a live, granted laptop session — never listens
+for an inbound trigger, so there is nothing for another device on the
+LAN to fake.
 """
 
 import tkinter as tk
 from tkinter import scrolledtext
-import threading, socket, sqlite3, os, sys, datetime, webbrowser
+import threading, sqlite3, os, sys, datetime, webbrowser, time
 import urllib.request, urllib.error, json
+import pystray
+from PIL import Image, ImageTk
 
 # ══════════════════════════════════════════════════
 #  CONFIG
 # ══════════════════════════════════════════════════
-TERMINAL_LISTEN_PORT = 7000
-KNOCK_TOKEN          = "AEROGUARD_VERIFIED"
+GATEWAY_HOST          = "192.168.100.130"
+GATEWAY_PORT          = 8000
+TERMINAL_SESSION_URL  = f"http://{GATEWAY_HOST}:{GATEWAY_PORT}/api/v1/terminal-session"
+POLL_INTERVAL_SECONDS = 3
 FIDS_HOST            = "127.0.0.1"
 FIDS_PORT            = 5000
 FIDS_URL             = f"http://{FIDS_HOST}:{FIDS_PORT}"
@@ -26,19 +32,32 @@ DB_CANDIDATES = [
 ]
 DB_PATH = next((p for p in DB_CANDIDATES if os.path.exists(p)), DB_CANDIDATES[0])
 
+def resource_path(rel_path):
+    """Resolve bundled assets — works both as a script and as a PyInstaller exe."""
+    base = getattr(sys, "_MEIPASS", _here)
+    return os.path.join(base, rel_path)
+
+ICON_PNG = resource_path(os.path.join("assets", "aeroguard_icon.png"))
+ICON_ICO = resource_path(os.path.join("assets", "aeroguard.ico"))
+
 # ══════════════════════════════════════════════════
-#  THEME  -  pure terminal green on black
+#  THEME  -  matches aeroguard_app/lib/main.dart ColorScheme
+#  primary cyan #00C3FF, near-black bg, status colours from
+#  the Flutter dashboard's live indicator palette.
 # ══════════════════════════════════════════════════
-BG        = "#0c0c0c"
-FG        = "#00ff41"        # classic terminal green
-FG_DIM    = "#007a1f"
-FG_CYAN   = "#00d4ff"
-FG_YELLOW = "#ffd700"
-FG_RED    = "#ff3333"
-FG_ORANGE = "#ff8c00"
-FG_WHITE  = "#e0e0e0"
-FG_HEADER = "#00ff41"
-CURSOR    = "#00ff41"
+BG        = "#0A0A0A"        # ThemeData.scaffoldBackgroundColor
+BAR_BG    = "#0D1421"        # dashboard_panel.dart card background
+FG        = "#00C3FF"        # ColorScheme.primary
+FG_DIM    = "#94A3B8"        # dashboard_panel.dart secondary text
+FG_CYAN   = "#00C3FF"
+FG_YELLOW = "#F59E0B"        # amber — admin_dashboard warn accent
+FG_RED    = "#EF4444"        # admin_dashboard error accent
+FG_ORANGE = "#F59E0B"
+FG_GREEN  = "#10B981"        # admin_dashboard "secured/online" accent
+FG_WHITE  = "#FFFFFF"
+FG_HEADER = "#00C3FF"
+CURSOR    = "#00C3FF"
+SELECT_BG = "#0D2A3D"
 FONT      = ("Courier New", 11)
 FONT_B    = ("Courier New", 11, "bold")
 FONT_LG   = ("Courier New", 13, "bold")
@@ -67,6 +86,19 @@ def fids_get(endpoint):
     except Exception as e:
         return None, str(e)
 
+def poll_session():
+    """
+    Active connectivity check — never a passive listener.
+    Only succeeds once the sniffer has actually injected an INPUT ACCEPT
+    rule for this machine's IP, so a successful response IS the proof
+    of a real, granted session, not a trusted inbound message.
+    """
+    try:
+        req = urllib.request.urlopen(TERMINAL_SESSION_URL, timeout=3)
+        return json.loads(req.read().decode())
+    except Exception:
+        return None
+
 # ══════════════════════════════════════════════════
 #  TERMINAL
 # ══════════════════════════════════════════════════
@@ -77,10 +109,15 @@ class AeroGuardTerminal:
         self.history     = []
         self.history_idx = -1
 
-        self.root.title("AeroGuard ZTNA  |  Secure Terminal")
+        self.root.title(f"AeroGuard ZTNA  |  {session['user']}")
         self.root.configure(bg=BG)
         self.root.geometry("1100x700")
         self.root.minsize(800, 500)
+        try:
+            self.root.iconbitmap(ICON_ICO)
+        except Exception:
+            pass
+        self.root.protocol("WM_DELETE_WINDOW", self.root.withdraw)
 
         self._build_ui()
         self._boot()
@@ -91,19 +128,33 @@ class AeroGuardTerminal:
     def _build_ui(self):
 
         # ── STATUS BAR (top, very thin) ──────────
-        bar = tk.Frame(self.root, bg="#111111", pady=4)
+        bar = tk.Frame(self.root, bg=BAR_BG, pady=6)
         bar.pack(fill="x", side="top")
 
-        tk.Label(bar, text=" AeroGuard ZTNA",
-                 fg=FG, bg="#111111", font=FONT_B).pack(side="left", padx=6)
+        try:
+            logo_src = Image.open(ICON_PNG).convert("RGBA")
+            logo_src.thumbnail((26, 26), Image.LANCZOS)
+            self._logo_img = ImageTk.PhotoImage(logo_src)
+            tk.Label(bar, image=self._logo_img,
+                     bg=BAR_BG).pack(side="left", padx=(10, 6))
+        except Exception:
+            pass
+
+        tk.Label(bar, text="AeroGuard ZTNA",
+                 fg=FG, bg=BAR_BG, font=FONT_B).pack(side="left", padx=(0, 6))
 
         tk.Label(bar, text="|", fg=FG_DIM,
-                 bg="#111111", font=FONT).pack(side="left")
+                 bg=BAR_BG, font=FONT).pack(side="left")
+
+        self.operator_lbl = tk.Label(
+            bar, text=f" {self.session['user']} ",
+            fg=BG, bg=FG, font=("Courier New", 9, "bold"))
+        self.operator_lbl.pack(side="left", padx=(6, 8))
 
         self.gw_lbl = tk.Label(bar, text=" GATEWAY: OPEN ",
-                                fg=BG, bg=FG,
+                                fg=BG, bg=FG_GREEN,
                                 font=("Courier New", 9, "bold"))
-        self.gw_lbl.pack(side="left", padx=8)
+        self.gw_lbl.pack(side="left", padx=2)
 
         self.db_lbl = tk.Label(bar, text=" DB: -- ",
                                 fg=BG, bg=FG_DIM,
@@ -116,7 +167,7 @@ class AeroGuardTerminal:
         self.fids_lbl.pack(side="left", padx=2)
 
         self.clock_lbl = tk.Label(bar, text="",
-                                   fg=FG_DIM, bg="#111111",
+                                   fg=FG_DIM, bg=BAR_BG,
                                    font=("Courier New", 9))
         self.clock_lbl.pack(side="right", padx=10)
         self._tick()
@@ -130,7 +181,7 @@ class AeroGuardTerminal:
             bg=BG, fg=FG,
             font=FONT,
             insertbackground=CURSOR,
-            selectbackground="#003300",
+            selectbackground=SELECT_BG,
             selectforeground=FG,
             relief="flat",
             state="disabled",
@@ -143,7 +194,7 @@ class AeroGuardTerminal:
         # colour tags
         self.out.tag_config("title",  foreground=FG,       font=FONT_LG)
         self.out.tag_config("sub",    foreground=FG_DIM,   font=FONT_B)
-        self.out.tag_config("ok",     foreground=FG)
+        self.out.tag_config("ok",     foreground=FG_GREEN)
         self.out.tag_config("err",    foreground=FG_RED)
         self.out.tag_config("warn",   foreground=FG_ORANGE)
         self.out.tag_config("info",   foreground=FG_CYAN)
@@ -206,14 +257,18 @@ class AeroGuardTerminal:
     #  BOOT
     # ─────────────────────────────────────────────
     def _boot(self):
+        name = self.session["user"]
         self.wl()
         self.wl("  ============================================================", "dim")
-        self.wl("   AEROGUARD ZTNA  --  SECURE TERMINAL  v4.0", "title")
+        self.wl("   AEROGUARD ZTNA  --  SECURE TERMINAL  v5.0", "title")
         self.wl("   Zero Trust Network Access | Airport Infrastructure", "sub")
         self.wl("  ============================================================", "dim")
         self.wl()
+        self.wl(f"   WELCOME, {name.upper()}", "title")
+        self.wl(f"   This terminal session is uniquely bound to your verified identity.", "sub")
+        self.wl()
         self.wl(f"  Session Time  : {self.session['time']}", "dim")
-        self.wl(f"  Verified User : {self.session['user']}", "ok")
+        self.wl(f"  Verified User : {name}", "ok")
         self.wl(f"  Client IP     : {self.session['ip']}", "dim")
         self.wl(f"  Auth Method   : Port-Knock ZTNA (no password required)", "dim")
         self.wl()
@@ -223,7 +278,7 @@ class AeroGuardTerminal:
         if db_ok:
             self.wl("  [DB]    airport_system.db ............. CONNECTED", "ok")
             self.root.after(0, lambda: self.db_lbl.config(
-                text=" DB: OK ", bg=FG))
+                text=" DB: OK ", bg=FG_GREEN))
         else:
             self.wl(f"  [DB]    airport_system.db ............. NOT FOUND", "err")
             self.root.after(0, lambda: self.db_lbl.config(
@@ -237,7 +292,7 @@ class AeroGuardTerminal:
             if data:
                 self.root.after(0, lambda: (
                     self.wl("  [FIDS]  Dashboard ..................... ONLINE", "ok"),
-                    self.fids_lbl.config(text=" FIDS: OK ", bg=FG),
+                    self.fids_lbl.config(text=" FIDS: OK ", bg=FG_GREEN),
                     self.wl(),
                     self.wl("  Gateway is OPEN. Type  help  to see all commands.", "cyan"),
                     self.wl()
@@ -251,6 +306,13 @@ class AeroGuardTerminal:
                     self.wl()
                 ))
         threading.Thread(target=_chk, daemon=True).start()
+
+    # ─────────────────────────────────────────────
+    #  REVOKE  -  called by TrayApp's poll loop, not a local one.
+    # ─────────────────────────────────────────────
+    def close_for_revoke(self):
+        self.wl()
+        self.wl("  [!] Session revoked or expired by gateway — closing terminal...", "err")
 
     # ─────────────────────────────────────────────
     #  INPUT HANDLING
@@ -306,8 +368,8 @@ class AeroGuardTerminal:
             threading.Thread(target=self._status, daemon=True).start()
         elif cmd in ("exit", "quit"):
             self._ui(lambda: (
-                self.wl("  Closing terminal...", "warn"),
-                self.root.after(1000, self.root.destroy)
+                self.wl("  Closing terminal — AeroGuard remains active in the system tray.", "warn"),
+                self.root.after(1000, self.root.withdraw)
             ))
         elif cmd == "flights":
             f = args[0] if args else None
@@ -721,42 +783,106 @@ class AeroGuardTerminal:
 
 
 # ══════════════════════════════════════════════════
-#  GATEWAY LISTENER
+#  TRAY APP  -  runs hidden, polls the gateway, pops the terminal
+#  to the foreground on grant and drops back to tray on revoke.
+#  No window is ever shown until a real session is confirmed, and
+#  no inbound port is ever opened — see poll_session() above.
 # ══════════════════════════════════════════════════
-def wait_for_gateway():
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind(("0.0.0.0", TERMINAL_LISTEN_PORT))
-    srv.listen(1)
-    print(f"[AeroGuard] Waiting on port {TERMINAL_LISTEN_PORT}...")
-    conn, addr = srv.accept()
-    data = conn.recv(2048).decode().strip()
-    conn.close(); srv.close()
-    if data.startswith(KNOCK_TOKEN):
-        parts = data.split("|")
-        return {
-            "user": parts[1] if len(parts) > 1 else "Verified Operator",
-            "ip":   addr[0],
-            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        }
-    return None
+class TrayApp:
+    def __init__(self, root):
+        self.root         = root
+        self.terminal     = None
+        self.tray         = None
+        self._withdraw_job = None
 
-def launch(session):
-    root = tk.Tk()
-    AeroGuardTerminal(root, session)
-    root.mainloop()
+        root.withdraw()                 # silent from the first frame
+        try:
+            root.iconbitmap(ICON_ICO)
+        except Exception:
+            pass
+
+        self._start_tray()
+        self._schedule_poll()
+
+    # ── system tray icon ─────────────────────────
+    def _tray_image(self):
+        try:
+            return Image.open(ICON_PNG)
+        except Exception:
+            return Image.new("RGB", (64, 64), FG)
+
+    def _start_tray(self):
+        menu = pystray.Menu(
+            pystray.MenuItem("Show Terminal", self._show, default=True),
+            pystray.MenuItem("Status: Waiting for authorization",
+                              None, enabled=False),
+            pystray.MenuItem("Exit", self._quit),
+        )
+        self.tray = pystray.Icon("aeroguard", self._tray_image(),
+                                  "AeroGuard ZTNA — Waiting", menu)
+        threading.Thread(target=self.tray.run, daemon=True).start()
+
+    def _set_tray_status(self, text):
+        if not self.tray:
+            return
+        self.tray.title = f"AeroGuard ZTNA — {text}"
+        self.tray.menu = pystray.Menu(
+            pystray.MenuItem("Show Terminal", self._show, default=True),
+            pystray.MenuItem(f"Status: {text}", None, enabled=False),
+            pystray.MenuItem("Exit", self._quit),
+        )
+
+    def _show(self, icon=None, item=None):
+        if self.terminal:
+            self.root.after(0, self._bring_to_front)
+
+    def _bring_to_front(self):
+        self.root.deiconify()
+        self.root.lift()
+        self.root.focus_force()
+
+    def _quit(self, icon, item):
+        icon.stop()
+        self.root.after(0, self.root.destroy)
+
+    # ── polling — the only signal that drives every transition ──
+    def _schedule_poll(self):
+        threading.Thread(target=self._poll_once, daemon=True).start()
+        self.root.after(POLL_INTERVAL_SECONDS * 1000, self._schedule_poll)
+
+    def _poll_once(self):
+        data   = poll_session()
+        active = bool(data and data.get("active"))
+        if active and self.terminal is None:
+            self.root.after(0, lambda: self._grant(data))
+        elif not active and self.terminal is not None:
+            self.root.after(0, self._revoke)
+
+    def _grant(self, data):
+        if self._withdraw_job:                  # cancel a pending hide from a
+            self.root.after_cancel(self._withdraw_job)   # just-revoked session so
+            self._withdraw_job = None                     # it can't yank this new one
+        session = {
+            "user": data.get("username") or "Verified Operator",
+            "ip":   GATEWAY_HOST,
+            "time": data.get("granted_at")
+                    or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        for w in self.root.winfo_children():    # clear any leftover widgets
+            w.destroy()                          # from a prior revoked session
+        self.terminal = AeroGuardTerminal(self.root, session)
+        self._set_tray_status(f"Active — {session['user']}")
+        self._bring_to_front()
+
+    def _revoke(self):
+        if self.terminal:
+            self.terminal.close_for_revoke()
+        self.terminal = None
+        self._set_tray_status("Waiting for authorization")
+        self._withdraw_job = self.root.after(2000, self.root.withdraw)
+
 
 if __name__ == "__main__":
-    if "--direct" in sys.argv:
-        launch({
-            "user": "Dev Operator (--direct)",
-            "ip":   "127.0.0.1",
-            "time": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        })
-    else:
-        session = wait_for_gateway()
-        if session:
-            launch(session)
-        else:
-            print("[AeroGuard] Invalid token. Exiting.")
-            sys.exit(1)
+    root = tk.Tk()
+    TrayApp(root)
+    root.mainloop()
