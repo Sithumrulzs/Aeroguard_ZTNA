@@ -6,9 +6,11 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_constants.dart';
 import '../services/location_service.dart';
+import '../services/auth_service.dart';
 import '../widgets/vendor_countdown_timer.dart';
 import '../config/transitions.dart';
 import 'sign_in_page.dart';
+import 'vendor_scan_laptop_screen.dart';
 
 enum _VKnockStatus { idle, knocking, success, pendingDevice, deviceApproved, deviceDenied, failed }
 
@@ -36,6 +38,17 @@ class _VendorDashboardState extends State<VendorDashboard> {
   String _deviceIp         = '';
   bool   _pollInFlight     = false;   // prevents overlapping async poll calls
   bool   _terminating      = false;   // prevents double dialog + navigation
+
+  @override
+  void initState() {
+    super.initState();
+    // Resume immediately on (re)open instead of assuming idle — this widget
+    // is also constructed when a returning vendor's saved session is
+    // restored at app startup, where the real state could be anything from
+    // "already approved" to "expired ages ago."
+    _pollDeviceStatusOnce();
+    _startDevicePolling();
+  }
 
   @override
   void dispose() {
@@ -86,19 +99,36 @@ class _VendorDashboardState extends State<VendorDashboard> {
       await Future.delayed(const Duration(seconds: 2));
 
       // ── 3. HTTP POST — bind TOFU + retrieve session details ──────────────
+      // Retry on connectivity misses (sniffer briefly slow to apply the
+      // rule) instead of declaring the knock rejected after one attempt —
+      // a real denial (bad token, device mismatch) still fails immediately
+      // since that comes back as an HTTP response, not a thrown exception.
       final position = await LocationService.getPosition();
-      final response = await http
-          .post(
-            Uri.parse(ApiConstants.vendorKnockEndpoint),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'token_hash':  widget.token,
-              'vendor_name': widget.vendorName,
-              if (position != null) 'latitude':  position.latitude,
-              if (position != null) 'longitude': position.longitude,
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
+      final knockBody = jsonEncode({
+        'token_hash':  widget.token,
+        'vendor_name': widget.vendorName,
+        if (position != null) 'latitude':  position.latitude,
+        if (position != null) 'longitude': position.longitude,
+      });
+
+      http.Response? response;
+      const maxAttempts = 4;
+      for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          response = await http
+              .post(
+                Uri.parse(ApiConstants.vendorKnockEndpoint),
+                headers: {'Content-Type': 'application/json'},
+                body: knockBody,
+              )
+              .timeout(const Duration(seconds: 15));
+          break;
+        } catch (e) {
+          if (attempt == maxAttempts) rethrow;
+          await Future.delayed(const Duration(seconds: 2));
+        }
+      }
+      if (response == null) return; // unreachable, but satisfies analyzer
 
       if (!mounted) return;
 
@@ -174,92 +204,101 @@ class _VendorDashboardState extends State<VendorDashboard> {
 
   void _startDevicePolling() {
     _devicePollTimer?.cancel();
-    _devicePollTimer = Timer.periodic(const Duration(seconds: 3), (_) async {
-      // Skip if a previous call is still in-flight (slow network) or session is
-      // already being terminated to prevent overlapping dialogs / double-pop.
-      if (_pollInFlight || _terminating) return;
-      _pollInFlight = true;
-      try {
-        final uri = Uri.parse(
-            '${ApiConstants.vendorDeviceStatusEndpoint}?token=${widget.token}');
-        final res = await http.get(uri).timeout(const Duration(seconds: 6));
-        if (!mounted) { _pollInFlight = false; return; }
+    _devicePollTimer = Timer.periodic(
+        const Duration(seconds: 3), (_) => _pollDeviceStatusOnce());
+  }
 
-        if (res.statusCode == 200) {
-          final data     = jsonDecode(res.body) as Map<String, dynamic>;
-          final status   = data['status']          as String? ?? '';
-          final approved = data['device_approved'] == true;
-          final deviceIp = data['device_ip']       as String? ?? '';
+  /// One status check — used by the periodic timer and by the one-shot
+  /// resume check on app restart, so a returning vendor sees their real
+  /// state immediately instead of a few seconds of stale "idle" first.
+  Future<void> _pollDeviceStatusOnce() async {
+    if (_pollInFlight || _terminating) return;
+    _pollInFlight = true;
+    try {
+      final uri = Uri.parse(
+          '${ApiConstants.vendorDeviceStatusEndpoint}?token=${widget.token}');
+      final res = await http.get(uri).timeout(const Duration(seconds: 6));
+      if (!mounted) { _pollInFlight = false; return; }
 
-          if (approved) {
-            // Keep timer running after approval so we detect future revocation.
-            if (_knockStatus != _VKnockStatus.deviceApproved) {
-              setState(() {
-                _knockStatus = _VKnockStatus.deviceApproved;
-                _deviceIp    = deviceIp;
-              });
-            } else if (deviceIp.isNotEmpty && _deviceIp != deviceIp) {
-              // IP may have arrived on a later poll (DB write race on first tick)
-              setState(() => _deviceIp = deviceIp);
-            }
-          } else if (status == 'pending_device_approval') {
-            if (_knockStatus != _VKnockStatus.pendingDevice) {
-              setState(() => _knockStatus = _VKnockStatus.pendingDevice);
-            }
-          } else if (status == 'expired' || status == 'revoked') {
-            _terminating = true;
-            _devicePollTimer?.cancel();
-            if (mounted) {
-              await showDialog(
-                context: context,
-                barrierDismissible: false,
-                builder: (ctx) => AlertDialog(
-                  backgroundColor: const Color(0xFF0D1421),
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(20)),
-                  title: const Text(
-                    'SESSION TERMINATED',
-                    style: TextStyle(
-                        color: Color(0xFFEF4444),
-                        fontSize: 13,
-                        letterSpacing: 2.0,
-                        fontWeight: FontWeight.bold),
-                  ),
-                  content: Text(
-                    status == 'revoked'
-                        ? 'Your access has been revoked by the administrator.'
-                        : 'Your access session has expired.',
-                    style: const TextStyle(
-                        color: Color(0xFF94A3B8), fontSize: 13, height: 1.5),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.pop(ctx),
-                      child: const Text('OK',
-                          style: TextStyle(
-                              color: Color(0xFFEF4444), letterSpacing: 1.0)),
-                    ),
-                  ],
-                ),
-              );
-              if (mounted) {
-                Navigator.pushReplacement(
-                    context, fadeRoute(const SignInPage()));
-              }
-            }
-          } else if (status == 'active' &&
-              _knockStatus == _VKnockStatus.pendingDevice &&
-              deviceIp.isEmpty) {
-            // Admin denied: pending_device_ip cleared to NULL
-            _devicePollTimer?.cancel();
-            setState(() => _knockStatus = _VKnockStatus.deviceDenied);
+      if (res.statusCode == 200) {
+        final data     = jsonDecode(res.body) as Map<String, dynamic>;
+        final status   = data['status']          as String? ?? '';
+        final approved = data['device_approved'] == true;
+        final deviceIp = data['device_ip']       as String? ?? '';
+
+        if (approved) {
+          // Keep timer running after approval so we detect future revocation.
+          if (_knockStatus != _VKnockStatus.deviceApproved) {
+            setState(() {
+              _knockStatus = _VKnockStatus.deviceApproved;
+              _deviceIp    = deviceIp;
+            });
+          } else if (deviceIp.isNotEmpty && _deviceIp != deviceIp) {
+            // IP may have arrived on a later poll (DB write race on first tick)
+            setState(() => _deviceIp = deviceIp);
           }
-        } else if (res.statusCode == 404) {
+        } else if (status == 'pending_device_approval') {
+          if (_knockStatus != _VKnockStatus.pendingDevice) {
+            setState(() => _knockStatus = _VKnockStatus.pendingDevice);
+          }
+        } else if (status == 'expired' || status == 'revoked') {
+          _terminating = true;
           _devicePollTimer?.cancel();
+          await AuthService.clearVendorSession();
+          if (mounted) {
+            await showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (ctx) => AlertDialog(
+                backgroundColor: const Color(0xFF0D1421),
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(20)),
+                title: const Text(
+                  'SESSION TERMINATED',
+                  style: TextStyle(
+                      color: Color(0xFFEF4444),
+                      fontSize: 13,
+                      letterSpacing: 2.0,
+                      fontWeight: FontWeight.bold),
+                ),
+                content: Text(
+                  status == 'revoked'
+                      ? 'Your access has been revoked by the administrator.'
+                      : 'Your access session has expired.',
+                  style: const TextStyle(
+                      color: Color(0xFF94A3B8), fontSize: 13, height: 1.5),
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(ctx),
+                    child: const Text('OK',
+                        style: TextStyle(
+                            color: Color(0xFFEF4444), letterSpacing: 1.0)),
+                  ),
+                ],
+              ),
+            );
+            if (mounted) {
+              Navigator.pushReplacement(
+                  context, fadeRoute(const SignInPage()));
+            }
+          }
+        } else if (status == 'active' &&
+            _knockStatus == _VKnockStatus.pendingDevice &&
+            deviceIp.isEmpty) {
+          // Admin denied: pending_device_ip cleared to NULL
+          _devicePollTimer?.cancel();
+          setState(() => _knockStatus = _VKnockStatus.deviceDenied);
+        } else if (status == 'active' && _knockStatus == _VKnockStatus.idle) {
+          // Resuming after an app restart — already knocked, nothing
+          // pending yet. Reflect the real state instead of staying idle.
+          setState(() => _knockStatus = _VKnockStatus.success);
         }
-      } catch (_) {}
-      _pollInFlight = false;
-    });
+      } else if (res.statusCode == 404) {
+        _devicePollTimer?.cancel();
+      }
+    } catch (_) {}
+    _pollInFlight = false;
   }
 
   // success/pendingDevice stay orange — nothing reads as "connected" until
@@ -530,6 +569,52 @@ class _VendorDashboardState extends State<VendorDashboard> {
                             ),
                           ),
                         ],
+                      ),
+                    ),
+                  ),
+                ],
+
+                if (_knockStatus == _VKnockStatus.success ||
+                    _knockStatus == _VKnockStatus.pendingDevice) ...[
+                  const SizedBox(height: 10),
+                  GestureDetector(
+                    onTap: () async {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              VendorScanLaptopScreen(token: widget.token),
+                        ),
+                      );
+                      _pollDeviceStatusOnce();
+                    },
+                    child: Container(
+                      width: double.infinity,
+                      height: 46,
+                      decoration: BoxDecoration(
+                        color: Colors.cyanAccent.withValues(alpha: 0.06),
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: Colors.cyanAccent.withValues(alpha: 0.3)),
+                      ),
+                      child: const Center(
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.qr_code_scanner,
+                                color: Colors.cyanAccent, size: 16),
+                            SizedBox(width: 8),
+                            Text(
+                              'SCAN LAPTOP',
+                              style: TextStyle(
+                                color: Colors.cyanAccent,
+                                fontSize: 12,
+                                fontWeight: FontWeight.w800,
+                                letterSpacing: 2.0,
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   ),

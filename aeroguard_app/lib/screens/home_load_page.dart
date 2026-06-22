@@ -6,6 +6,7 @@ import '../services/enclave_service.dart';
 import '../services/auth_service.dart';
 import '../config/transitions.dart';
 import 'biometric_auth_screen.dart';
+import 'vendor_dashboard.dart';
 
 class HomeLoadPage extends StatefulWidget {
   const HomeLoadPage({super.key});
@@ -80,6 +81,34 @@ class _HomeLoadPageState extends State<HomeLoadPage>
   }
 
   Future<void> _bootSequence() async {
+    // A returning vendor with a still-valid session skips the admin
+    // biometric/sign-in path entirely and goes straight back to their
+    // dashboard — closing the app shouldn't force them to re-scan the QR
+    // for a session that's still perfectly alive on the backend.
+    final vendorSession = await AuthService.getVendorSession();
+    if (vendorSession != null) {
+      try {
+        final expires = DateTime.parse(vendorSession['expiresAt']!);
+        if (DateTime.now().toUtc().isBefore(expires.toUtc())) {
+          await Future.delayed(const Duration(milliseconds: 1200));
+          if (mounted) {
+            Navigator.pushReplacement(
+              context,
+              bootToAuthRoute(VendorDashboard(
+                vendorName: vendorSession['vendorName']!,
+                company:    vendorSession['company']!,
+                token:      vendorSession['token']!,
+                expiresAt:  vendorSession['expiresAt']!,
+              )),
+            );
+          }
+          return;
+        }
+      } catch (_) {}
+      // Unparsable or expired — stale, drop it and fall through to admin flow.
+      await AuthService.clearVendorSession();
+    }
+
     // Get authenticated username
     final username = await AuthService.getUsername() ?? 'admin';
 

@@ -40,27 +40,36 @@ class NetworkService {
     // ── 2. Wait for sniffer to inject iptables ACCEPT + DNAT rule ───────────
     await Future.delayed(const Duration(seconds: 2));
 
-    // ── 3. HTTP POST — port 8000 is now open for this IP via DNAT ───────────
-    try {
-      final response = await http
-          .post(
-            _knockUri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(body),
-          )
-          .timeout(Duration(seconds: ApiConstants.connectionTimeoutSeconds));
+    // ── 3. HTTP POST — retry a few times instead of a single shot.
+    // The sniffer can occasionally be a beat slow to apply the rule (system
+    // load, a concurrent knock) — one attempt right after a fixed delay was
+    // declaring the whole knock "rejected" for what was really just a late
+    // rule, not a real denial.
+    const maxAttempts = 4;
+    for (var attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        final response = await http
+            .post(
+              _knockUri,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode(body),
+            )
+            .timeout(Duration(seconds: ApiConstants.connectionTimeoutSeconds));
 
-      if (response.statusCode == 200) {
-        debugPrint('[+] KNOCK ACCEPTED — gateway open.');
-        LocationService.sendToBackend(username);
-        return true;
+        if (response.statusCode == 200) {
+          debugPrint('[+] KNOCK ACCEPTED — gateway open (attempt $attempt).');
+          LocationService.sendToBackend(username);
+          return true;
+        }
+        debugPrint('[-] KNOCK DENIED — HTTP ${response.statusCode}');
+        return false; // a real HTTP error response — not a connectivity miss
+      } catch (e) {
+        debugPrint('[-] Gateway unreachable (attempt $attempt): $e');
+        if (attempt == maxAttempts) return false;
+        await Future.delayed(const Duration(seconds: 2));
       }
-      debugPrint('[-] KNOCK DENIED — HTTP ${response.statusCode}');
-      return false;
-    } catch (e) {
-      debugPrint('[-] Gateway unreachable: $e');
-      return false;
     }
+    return false;
   }
 
   /// Terminates the admin's active session — removes iptables rules for

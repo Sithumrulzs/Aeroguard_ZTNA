@@ -4,6 +4,7 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../config/transitions.dart';
 import '../services/location_service.dart';
+import '../services/auth_service.dart';
 import 'vendor_dashboard.dart';
 
 class VendorScannerScreen extends StatefulWidget {
@@ -52,6 +53,15 @@ class _VendorScannerScreenState extends State<VendorScannerScreen> {
     }
 
     setState(() => _isScanned = true);
+
+    // Persist immediately — closing the app shouldn't lose this session
+    // just because nothing routed it back to AuthService until now.
+    await AuthService.saveVendorSession(
+      token:      data['token'] as String,
+      vendorName: data['vendor_name'] as String,
+      company:    data['company'] as String,
+      expiresAt:  data['expires_at'] as String,
+    );
 
     // Capture vendor GPS at login (QR scan = vendor auth event).
     LocationService.sendVendorLocation(data['token'] as String);

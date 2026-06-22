@@ -60,10 +60,11 @@ class NotificationService {
     _initialized = true;
   }
 
-  /// Fires an actionable alert the moment a vendor device is detected on
-  /// the gateway's LAN, before it is ever allowed to connect — the admin
-  /// can Approve/Decline straight from the notification shade, or tap the
-  /// body to open the full device card (with MAC override / network scan).
+  /// Fires the moment a vendor knocks, before any device is ever allowed to
+  /// connect. The gateway no longer auto-guesses which device is theirs —
+  /// the vendor proves it themselves by scanning their laptop's QR — so
+  /// there is nothing to Approve until that's done; only Decline is offered
+  /// as a one-tap action here. The body tap opens the full card.
   static Future<void> showVendorDeviceAlert({
     required String vendorName,
     required String company,
@@ -73,6 +74,7 @@ class NotificationService {
     required String adminUsername,
   }) async {
     await init();
+    final bool deviceKnown = deviceIp.isNotEmpty;
     final AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
       'aeroguard_alerts',
@@ -83,24 +85,83 @@ class NotificationService {
       color: const Color(0xFF00C3FF),
       enableVibration: true,
       playSound: true,
-      actions: const [
-        AndroidNotificationAction('approve', 'Approve',
-            showsUserInterface: false, cancelNotification: true),
-        AndroidNotificationAction('decline', 'Decline',
+      actions: [
+        if (deviceKnown)
+          const AndroidNotificationAction('approve', 'Approve',
+              showsUserInterface: false, cancelNotification: true),
+        const AndroidNotificationAction('decline', 'Decline',
             showsUserInterface: false, cancelNotification: true),
       ],
     );
     final NotificationDetails details =
         NotificationDetails(android: androidDetails);
+    final body = deviceKnown
+        ? '$vendorName ($company)\nIP: $deviceIp   MAC: $deviceMac'
+        : '$vendorName ($company) has knocked\n'
+            'Open the app once their laptop has been paired via QR.';
     await _plugin.show(
       vendorName.hashCode,
       'Device Access Request',
-      '$vendorName ($company)\nIP: $deviceIp   MAC: $deviceMac',
+      body,
       details,
       payload: jsonEncode({
         'token_hash':     tokenHash,
         'admin_username': adminUsername,
       }),
+    );
+  }
+
+  /// Purely informational — fires once a vendor's device is actually
+  /// granted full access, so the admin sees a clear record of who connected
+  /// and from where without needing to act on anything.
+  static Future<void> showVendorConnectedAlert({
+    required String vendorName,
+    required String ip,
+    required String mac,
+  }) async {
+    await init();
+    const androidDetails = AndroidNotificationDetails(
+      'aeroguard_alerts',
+      'AeroGuard Security Alerts',
+      channelDescription: 'Vendor connection activity',
+      importance: Importance.defaultImportance,
+      priority: Priority.defaultPriority,
+      color: Color(0xFF10B981),
+      enableVibration: false,
+      playSound: false,
+    );
+    await _plugin.show(
+      'connected_$vendorName'.hashCode,
+      'Vendor Connected',
+      mac.isNotEmpty
+          ? '$vendorName — IP: $ip   MAC: $mac'
+          : '$vendorName — IP: $ip',
+      const NotificationDetails(android: androidDetails),
+    );
+  }
+
+  /// Purely informational — fires on a denied/failed knock attempt, so a
+  /// rejected vendor isn't invisible just because nothing came of it.
+  static Future<void> showVendorFailedAlert({
+    required String vendorName,
+    required String reason,
+  }) async {
+    await init();
+    const androidDetails = AndroidNotificationDetails(
+      'aeroguard_alerts',
+      'AeroGuard Security Alerts',
+      channelDescription: 'Vendor connection activity',
+      importance: Importance.high,
+      priority: Priority.high,
+      color: Color(0xFFEF4444),
+      enableVibration: true,
+      playSound: false,
+    );
+    await _plugin.show(
+      'failed_$vendorName${DateTime.now().millisecondsSinceEpoch}'.hashCode,
+      'Vendor Connection Failed',
+      '$vendorName — $reason',
+      const NotificationDetails(android: androidDetails),
     );
   }
 }

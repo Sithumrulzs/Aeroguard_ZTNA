@@ -8,9 +8,10 @@ LAN to fake.
 
 import tkinter as tk
 from tkinter import scrolledtext
-import threading, sqlite3, os, sys, datetime, webbrowser, time
-import urllib.request, urllib.error, json
+import threading, sqlite3, os, sys, datetime, webbrowser, time, math
+import urllib.request, urllib.error, json, secrets, socket, uuid
 import pystray
+import qrcode
 from PIL import Image, ImageTk
 
 # ══════════════════════════════════════════════════
@@ -20,9 +21,17 @@ GATEWAY_HOST          = "192.168.100.130"
 GATEWAY_PORT          = 8000
 TERMINAL_SESSION_URL  = f"http://{GATEWAY_HOST}:{GATEWAY_PORT}/api/v1/terminal-session"
 POLL_INTERVAL_SECONDS = 3
+REVOKE_MISS_THRESHOLD = 3   # consecutive failed polls before treating as a real revoke
 FIDS_HOST            = "127.0.0.1"
 FIDS_PORT            = 5000
 FIDS_URL             = f"http://{FIDS_HOST}:{FIDS_PORT}"
+
+# This exe is identical for every vendor — it never knows in advance which
+# session it belongs to. CENTRAL_AUTH is the always-reachable cloud broker
+# that links this device's self-reported identity to a vendor's session the
+# moment they scan the QR this exe generates, no typing, no per-vendor build.
+CENTRAL_AUTH_URL       = "https://aeroguard-ztna.onrender.com"
+REGISTER_PAIRING_URL   = f"{CENTRAL_AUTH_URL}/api/v1/device/register-pairing"
 
 _here = os.path.dirname(os.path.abspath(sys.argv[0]))
 DB_CANDIDATES = [
@@ -58,9 +67,44 @@ FG_WHITE  = "#FFFFFF"
 FG_HEADER = "#00C3FF"
 CURSOR    = "#00C3FF"
 SELECT_BG = "#0D2A3D"
-FONT      = ("Courier New", 11)
-FONT_B    = ("Courier New", 11, "bold")
-FONT_LG   = ("Courier New", 13, "bold")
+
+# Output area stays monospace (column alignment matters for tables);
+# chrome — headers, badges, buttons, splash windows — uses a clean sans,
+# matching the mobile app's typography instead of a typewriter look.
+MONO      = "Consolas"
+SANS      = "Segoe UI"
+FONT      = (MONO, 11)
+FONT_B    = (MONO, 11, "bold")
+FONT_LG   = (MONO, 13, "bold")
+UI_FONT   = (SANS, 10)
+UI_FONT_B = (SANS, 10, "bold")
+UI_FONT_LG = (SANS, 15, "bold")
+
+# Matches the exact gradient used on aeroguard_app's sign-in/load screens.
+GRADIENT_TOP    = "#050810"
+GRADIENT_BOTTOM = "#0A1628"
+
+def _hex_to_rgb(h):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4))
+
+def _lerp_color(c1, c2, t):
+    r1, g1, b1 = _hex_to_rgb(c1)
+    r2, g2, b2 = _hex_to_rgb(c2)
+    return "#%02x%02x%02x" % (
+        int(r1 + (r2 - r1) * t), int(g1 + (g2 - g1) * t), int(b1 + (b2 - b1) * t))
+
+def draw_vertical_gradient(canvas, width, height, top_color, bottom_color):
+    for y in range(height):
+        canvas.create_line(0, y, width, y, fill=_lerp_color(top_color, bottom_color, y / height))
+
+def draw_rounded_rect(canvas, x1, y1, x2, y2, r, **kwargs):
+    points = [
+        x1 + r, y1,  x2 - r, y1,  x2, y1,  x2, y1 + r,
+        x2, y2 - r,  x2, y2,  x2 - r, y2,  x1 + r, y2,
+        x1, y2,  x1, y2 - r,  x1, y1 + r,  x1, y1,
+    ]
+    return canvas.create_polygon(points, smooth=True, **kwargs)
 
 # ══════════════════════════════════════════════════
 #  DB + FIDS HELPERS
@@ -94,10 +138,46 @@ def poll_session():
     of a real, granted session, not a trusted inbound message.
     """
     try:
-        req = urllib.request.urlopen(TERMINAL_SESSION_URL, timeout=3)
+        req = urllib.request.urlopen(TERMINAL_SESSION_URL, timeout=5)
         return json.loads(req.read().decode())
     except Exception:
         return None
+
+def _own_mac():
+    node = uuid.getnode()
+    return ":".join(f"{(node >> shift) & 0xff:02x}" for shift in range(40, -1, -8))
+
+def _own_local_ip():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect((GATEWAY_HOST, 1))
+        return s.getsockname()[0]
+    except Exception:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+def register_pairing(pairing_code):
+    """
+    Self-report this machine's identity against a fresh pairing code —
+    no vendor token involved. Over HTTPS to central_auth (cloud), reachable
+    long before this laptop is anywhere near the gateway's LAN.
+    """
+    body = json.dumps({
+        "pairing_code": pairing_code,
+        "mac":          _own_mac(),
+        "hostname":     socket.gethostname(),
+        "local_ip":     _own_local_ip(),
+    }).encode()
+    req = urllib.request.Request(
+        REGISTER_PAIRING_URL, data=body,
+        headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=8)
+        return True
+    except Exception as e:
+        print(f"[-] Pairing registration failed: {e}")
+        return False
 
 # ══════════════════════════════════════════════════
 #  TERMINAL
@@ -128,52 +208,45 @@ class AeroGuardTerminal:
     def _build_ui(self):
 
         # ── STATUS BAR (top, very thin) ──────────
-        bar = tk.Frame(self.root, bg=BAR_BG, pady=6)
+        bar = tk.Frame(self.root, bg=BAR_BG, pady=8)
         bar.pack(fill="x", side="top")
 
         try:
             logo_src = Image.open(ICON_PNG).convert("RGBA")
-            logo_src.thumbnail((26, 26), Image.LANCZOS)
+            logo_src.thumbnail((24, 24), Image.LANCZOS)
             self._logo_img = ImageTk.PhotoImage(logo_src)
             tk.Label(bar, image=self._logo_img,
-                     bg=BAR_BG).pack(side="left", padx=(10, 6))
+                     bg=BAR_BG).pack(side="left", padx=(12, 8))
         except Exception:
             pass
 
         tk.Label(bar, text="AeroGuard ZTNA",
-                 fg=FG, bg=BAR_BG, font=FONT_B).pack(side="left", padx=(0, 6))
-
-        tk.Label(bar, text="|", fg=FG_DIM,
-                 bg=BAR_BG, font=FONT).pack(side="left")
+                 fg=FG_WHITE, bg=BAR_BG, font=UI_FONT_B).pack(side="left", padx=(0, 10))
 
         self.operator_lbl = tk.Label(
-            bar, text=f" {self.session['user']} ",
-            fg=BG, bg=FG, font=("Courier New", 9, "bold"))
-        self.operator_lbl.pack(side="left", padx=(6, 8))
+            bar, text=f"  {self.session['user']}  ",
+            fg=BG, bg=FG, font=UI_FONT_B)
+        self.operator_lbl.pack(side="left", padx=(0, 6))
 
-        self.gw_lbl = tk.Label(bar, text=" GATEWAY: OPEN ",
-                                fg=BG, bg=FG_GREEN,
-                                font=("Courier New", 9, "bold"))
-        self.gw_lbl.pack(side="left", padx=2)
+        self.gw_lbl = tk.Label(bar, text="  GATEWAY OPEN  ",
+                                fg=BG, bg=FG_GREEN, font=UI_FONT_B)
+        self.gw_lbl.pack(side="left", padx=3)
 
-        self.db_lbl = tk.Label(bar, text=" DB: -- ",
-                                fg=BG, bg=FG_DIM,
-                                font=("Courier New", 9, "bold"))
-        self.db_lbl.pack(side="left", padx=2)
+        self.db_lbl = tk.Label(bar, text="  DB --  ",
+                                fg=BG, bg=FG_DIM, font=UI_FONT_B)
+        self.db_lbl.pack(side="left", padx=3)
 
-        self.fids_lbl = tk.Label(bar, text=" FIDS: -- ",
-                                  fg=BG, bg=FG_DIM,
-                                  font=("Courier New", 9, "bold"))
-        self.fids_lbl.pack(side="left", padx=2)
+        self.fids_lbl = tk.Label(bar, text="  FIDS --  ",
+                                  fg=BG, bg=FG_DIM, font=UI_FONT_B)
+        self.fids_lbl.pack(side="left", padx=3)
 
         self.clock_lbl = tk.Label(bar, text="",
-                                   fg=FG_DIM, bg=BAR_BG,
-                                   font=("Courier New", 9))
-        self.clock_lbl.pack(side="right", padx=10)
+                                   fg=FG_DIM, bg=BAR_BG, font=UI_FONT)
+        self.clock_lbl.pack(side="right", padx=12)
         self._tick()
 
         # ── SEPARATOR ───────────────────────────
-        tk.Frame(self.root, bg=FG_DIM, height=1).pack(fill="x")
+        tk.Frame(self.root, bg="#123247", height=2).pack(fill="x")
 
         # ── OUTPUT AREA ─────────────────────────
         self.out = scrolledtext.ScrolledText(
@@ -206,7 +279,7 @@ class AeroGuardTerminal:
         self.out.tag_config("sec",    foreground=FG,       font=FONT_B)
 
         # ── SEPARATOR ───────────────────────────
-        tk.Frame(self.root, bg=FG_DIM, height=1).pack(fill="x")
+        tk.Frame(self.root, bg="#123247", height=2).pack(fill="x")
 
         # ── INPUT ROW ───────────────────────────
         inp = tk.Frame(self.root, bg=BG, pady=6)
@@ -278,11 +351,11 @@ class AeroGuardTerminal:
         if db_ok:
             self.wl("  [DB]    airport_system.db ............. CONNECTED", "ok")
             self.root.after(0, lambda: self.db_lbl.config(
-                text=" DB: OK ", bg=FG_GREEN))
+                text="  DB OK  ", bg=FG_GREEN))
         else:
             self.wl(f"  [DB]    airport_system.db ............. NOT FOUND", "err")
             self.root.after(0, lambda: self.db_lbl.config(
-                text=" DB: ERR ", bg=FG_RED))
+                text="  DB ERR  ", bg=FG_RED))
 
         # FIDS check async
         self.wl(f"  [FIDS]  Connecting to {FIDS_URL} ...", "dim")
@@ -292,7 +365,7 @@ class AeroGuardTerminal:
             if data:
                 self.root.after(0, lambda: (
                     self.wl("  [FIDS]  Dashboard ..................... ONLINE", "ok"),
-                    self.fids_lbl.config(text=" FIDS: OK ", bg=FG_GREEN),
+                    self.fids_lbl.config(text="  FIDS OK  ", bg=FG_GREEN),
                     self.wl(),
                     self.wl("  Gateway is OPEN. Type  help  to see all commands.", "cyan"),
                     self.wl()
@@ -300,7 +373,7 @@ class AeroGuardTerminal:
             else:
                 self.root.after(0, lambda: (
                     self.wl("  [FIDS]  Dashboard ..................... OFFLINE", "warn"),
-                    self.fids_lbl.config(text=" FIDS: OFF ", bg=FG_ORANGE),
+                    self.fids_lbl.config(text="  FIDS OFF  ", bg=FG_ORANGE),
                     self.wl(),
                     self.wl("  Gateway is OPEN. Type  help  to see all commands.", "cyan"),
                     self.wl()
@@ -783,6 +856,161 @@ class AeroGuardTerminal:
 
 
 # ══════════════════════════════════════════════════
+#  PAIRING WINDOW  -  shows the QR a vendor scans with their phone to
+#  link this generic, unmodified exe to their specific session — no
+#  typing, no per-vendor build. Re-showable from the tray at any time.
+# ══════════════════════════════════════════════════
+class PairingWindow:
+    WIDTH, HEIGHT = 380, 640
+
+    def __init__(self, root, pairing_code):
+        self.win = tk.Toplevel(root)
+        self.win.title("AeroGuard ZTNA — Pair This Device")
+        self.win.geometry(f"{self.WIDTH}x{self.HEIGHT}")
+        self.win.resizable(False, False)
+        try:
+            self.win.iconbitmap(ICON_ICO)
+        except Exception:
+            pass
+        try:
+            self.win.attributes("-alpha", 0.97)   # soft glass transparency
+        except Exception:
+            pass
+        self.win.protocol("WM_DELETE_WINDOW", self.win.withdraw)
+
+        self._closing      = False
+        self._pulse_phase  = 0.0
+        self._pulse_color  = FG          # cyan while waiting, green on approval
+        self._pulse_job    = None
+
+        c = self.canvas = tk.Canvas(self.win, width=self.WIDTH, height=self.HEIGHT,
+                                     highlightthickness=0, bd=0)
+        c.pack(fill="both", expand=True)
+        draw_vertical_gradient(c, self.WIDTH, self.HEIGHT, GRADIENT_TOP, GRADIENT_BOTTOM)
+
+        # ── Glass panel — a single frosted-looking card holding everything,
+        #    instead of plain text floating on the gradient ───────────────
+        self._glass_fill = _lerp_color(GRADIENT_TOP, "#3D5C82", 0.30)
+        draw_rounded_rect(c, 20, 20, self.WIDTH - 20, self.HEIGHT - 20, 26,
+                           fill=self._glass_fill, outline=FG, width=1)
+        # a thin inner highlight line to sell the "glass edge" look
+        draw_rounded_rect(c, 23, 23, self.WIDTH - 23, self.HEIGHT - 23, 24,
+                           fill="", outline=FG_WHITE, width=1)
+
+        # ── Pulsing rings + full-resolution logo ────────────────────────
+        self._cx, self._cy = self.WIDTH / 2, 124
+        self._ring_outer = c.create_oval(0, 0, 0, 0, outline=FG, width=2)
+        self._ring_mid   = c.create_oval(0, 0, 0, 0, outline=FG, width=1)
+        try:
+            logo_src = Image.open(ICON_PNG).convert("RGBA")
+            logo_src.thumbnail((108, 108), Image.LANCZOS)   # full-quality, large
+            self._logo_photo = ImageTk.PhotoImage(logo_src)
+            c.create_image(self._cx, self._cy, image=self._logo_photo)
+        except Exception:
+            pass
+
+        # ── Wordmark ─────────────────────────────────────────────────────
+        c.create_text(self.WIDTH / 2, 208, text="AEROGUARD",
+                       fill=FG_WHITE, font=(SANS, 17, "bold"))
+        c.create_text(self.WIDTH / 2, 231, text="ZERO TRUST NETWORK ACCESS",
+                       fill=FG, font=(SANS, 8, "bold"))
+
+        c.create_text(self.WIDTH / 2, 266, text="PAIR THIS DEVICE",
+                       fill=FG_DIM, font=UI_FONT_B)
+        c.create_text(self.WIDTH / 2, 286,
+                       text="Open the AeroGuard app, then Scan Laptop",
+                       fill=FG_DIM, font=UI_FONT)
+
+        # ── QR sits on a true-white chip — kept high-contrast on purpose
+        #    so it stays reliably scannable inside the tinted glass card ──
+        qr_size = 224
+        pad = 14
+        qx1 = self.WIDTH / 2 - qr_size / 2 - pad
+        qy1 = 310
+        qx2 = qx1 + qr_size + pad * 2
+        qy2 = qy1 + qr_size + pad * 2
+        draw_rounded_rect(c, qx1, qy1, qx2, qy2, 16, fill="#FFFFFF", outline="")
+
+        qr_img = qrcode.make(
+            json.dumps({"type": "aeroguard_device_pairing",
+                        "pairing_code": pairing_code}),
+            border=2,
+        ).resize((qr_size, qr_size))
+        self._qr_photo = ImageTk.PhotoImage(qr_img)
+        c.create_image(self.WIDTH / 2, (qy1 + qy2) / 2, image=self._qr_photo)
+
+        c.create_text(self.WIDTH / 2, qy2 + 20, text=pairing_code,
+                      fill=FG_DIM, font=(MONO, 11))
+
+        self.status_text = c.create_text(
+            self.WIDTH / 2, qy2 + 42, text="Waiting for scan...",
+            fill=FG_DIM, font=UI_FONT)
+
+        # ── Hide button ──────────────────────────────────────────────────
+        btn_w, btn_h = 100, 32
+        bx1 = self.WIDTH / 2 - btn_w / 2
+        by1 = qy2 + 62
+        hide_btn = draw_rounded_rect(c, bx1, by1, bx1 + btn_w, by1 + btn_h, 8,
+                                      fill="", outline=FG_DIM)
+        hide_txt = c.create_text(self.WIDTH / 2, by1 + btn_h / 2,
+                                  text="HIDE", fill=FG_DIM, font=UI_FONT_B)
+        for item in (hide_btn, hide_txt):
+            c.tag_bind(item, "<Button-1>", lambda e: self.win.withdraw())
+            c.tag_bind(item, "<Enter>", lambda e: c.itemconfig(hide_txt, fill=FG))
+            c.tag_bind(item, "<Leave>", lambda e: c.itemconfig(hide_txt, fill=FG_DIM))
+
+        self._animate()
+
+    # ── continuous pulse — cyan while waiting, switched to green the
+    #    instant the admin approves (see play_approved_and_close) ────────
+    def _animate(self):
+        if self._closing:
+            return
+        self._pulse_phase += 0.07
+        t = (math.sin(self._pulse_phase) + 1) / 2   # 0..1 breathing curve
+        r_outer = 52 + t * 16
+        r_mid   = 40 + t * 11
+        cx, cy = self._cx, self._cy
+        self.canvas.coords(self._ring_outer, cx - r_outer, cy - r_outer,
+                            cx + r_outer, cy + r_outer)
+        self.canvas.coords(self._ring_mid, cx - r_mid, cy - r_mid,
+                            cx + r_mid, cy + r_mid)
+        self.canvas.itemconfig(self._ring_outer,
+            outline=_lerp_color(self._glass_fill, self._pulse_color, 0.3 + t * 0.6))
+        self.canvas.itemconfig(self._ring_mid,
+            outline=_lerp_color(self._glass_fill, self._pulse_color, 0.45 + t * 0.55))
+        self._pulse_job = self.win.after(40, self._animate)
+
+    def show(self):
+        self.win.deiconify()
+        self.win.lift()
+
+    def set_status(self, text):
+        self.canvas.itemconfig(self.status_text, text=text)
+
+    def play_approved_and_close(self, on_done):
+        """
+        Admin just approved this device — the rings glow green for a
+        couple of beats, then the whole window closes for good and the
+        real terminal takes over. on_done() is called after destruction.
+        """
+        self.show()
+        self._pulse_color = FG_GREEN
+        self.set_status("Device approved — connecting...")
+        self.win.after(950, lambda: self._finish_close(on_done))
+
+    def _finish_close(self, on_done):
+        self._closing = True
+        if self._pulse_job:
+            try:
+                self.win.after_cancel(self._pulse_job)
+            except Exception:
+                pass
+        self.win.destroy()
+        on_done()
+
+
+# ══════════════════════════════════════════════════
 #  TRAY APP  -  runs hidden, polls the gateway, pops the terminal
 #  to the foreground on grant and drops back to tray on revoke.
 #  No window is ever shown until a real session is confirmed, and
@@ -794,6 +1022,9 @@ class TrayApp:
         self.terminal     = None
         self.tray         = None
         self._withdraw_job = None
+        self._miss_count   = 0
+        self.pairing_code  = secrets.token_hex(3).upper()   # e.g. "A3F9C2"
+        self.pairing_win   = PairingWindow(root, self.pairing_code)
 
         root.withdraw()                 # silent from the first frame
         try:
@@ -803,6 +1034,18 @@ class TrayApp:
 
         self._start_tray()
         self._schedule_poll()
+        self._start_pairing_refresh()
+        self.root.after(300, self.pairing_win.show)
+
+    # ── pairing — kept fresh for as long as this exe keeps running, so
+    #    issuing it the day before a visit doesn't let the code expire
+    #    before the vendor ever gets a chance to scan it ──────────────
+    def _start_pairing_refresh(self):
+        def _loop():
+            while True:
+                register_pairing(self.pairing_code)
+                time.sleep(300)
+        threading.Thread(target=_loop, daemon=True).start()
 
     # ── system tray icon ─────────────────────────
     def _tray_image(self):
@@ -814,6 +1057,7 @@ class TrayApp:
     def _start_tray(self):
         menu = pystray.Menu(
             pystray.MenuItem("Show Terminal", self._show, default=True),
+            pystray.MenuItem("Show Pairing QR", self._show_pairing),
             pystray.MenuItem("Status: Waiting for authorization",
                               None, enabled=False),
             pystray.MenuItem("Exit", self._quit),
@@ -828,9 +1072,19 @@ class TrayApp:
         self.tray.title = f"AeroGuard ZTNA — {text}"
         self.tray.menu = pystray.Menu(
             pystray.MenuItem("Show Terminal", self._show, default=True),
+            pystray.MenuItem("Show Pairing QR", self._show_pairing),
             pystray.MenuItem(f"Status: {text}", None, enabled=False),
             pystray.MenuItem("Exit", self._quit),
         )
+
+    def _show_pairing(self, icon=None, item=None):
+        # Once a real session is granted, the pairing window is torn down
+        # along with everything else from a prior revoke — nothing left
+        # to re-show, and that's fine, pairing has already done its job.
+        def _do():
+            if self.pairing_win.win.winfo_exists():
+                self.pairing_win.show()
+        self.root.after(0, _do)
 
     def _show(self, icon=None, item=None):
         if self.terminal:
@@ -853,10 +1107,24 @@ class TrayApp:
     def _poll_once(self):
         data   = poll_session()
         active = bool(data and data.get("active"))
-        if active and self.terminal is None:
-            self.root.after(0, lambda: self._grant(data))
-        elif not active and self.terminal is not None:
-            self.root.after(0, self._revoke)
+
+        if active:
+            self._miss_count = 0
+            if self.terminal is None:
+                self.root.after(0, lambda: self._grant(data))
+            return
+
+        # A single failed/empty poll is treated as a miss, not a revoke —
+        # one slow response on ordinary WiFi (more likely exactly when the
+        # gateway is busy handling a concurrent admin+vendor knock) used to
+        # close the terminal immediately, then reopen it 3s later on the
+        # next successful poll. Require a few consecutive misses before
+        # treating it as a genuine revoke.
+        if self.terminal is not None:
+            self._miss_count += 1
+            if self._miss_count >= REVOKE_MISS_THRESHOLD:
+                self._miss_count = 0
+                self.root.after(0, self._revoke)
 
     def _grant(self, data):
         if self._withdraw_job:                  # cancel a pending hide from a
@@ -868,11 +1136,22 @@ class TrayApp:
             "time": data.get("granted_at")
                     or datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
-        for w in self.root.winfo_children():    # clear any leftover widgets
-            w.destroy()                          # from a prior revoked session
-        self.terminal = AeroGuardTerminal(self.root, session)
-        self._set_tray_status(f"Active — {session['user']}")
-        self._bring_to_front()
+
+        def _open_terminal():
+            for w in self.root.winfo_children():   # clear any leftover widgets
+                w.destroy()                          # from a prior revoked session
+            self.terminal = AeroGuardTerminal(self.root, session)
+            self._set_tray_status(f"Active — {session['user']}")
+            self._bring_to_front()
+
+        # First grant of this exe's life: the pairing window is still up,
+        # so play the green "approved" pulse on it before handing off to
+        # the terminal. On any later regrant (after a revoke), it's already
+        # been destroyed — go straight to the terminal.
+        if self.pairing_win.win.winfo_exists():
+            self.pairing_win.play_approved_and_close(_open_terminal)
+        else:
+            _open_terminal()
 
     def _revoke(self):
         if self.terminal:

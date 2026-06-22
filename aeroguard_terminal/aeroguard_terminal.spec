@@ -13,6 +13,7 @@ a = Analysis(
         'threading', 'urllib.request', 'urllib.error',
         'sqlite3', 'json', 'webbrowser',
         'pystray', 'pystray._win32', 'PIL', 'PIL.Image', 'PIL.ImageTk',
+        'qrcode', 'qrcode.image.pil', 'secrets', 'socket', 'uuid',
     ],
     hookspath=[],
     runtime_hooks=[],

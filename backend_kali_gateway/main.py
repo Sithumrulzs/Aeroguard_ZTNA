@@ -365,7 +365,7 @@ def terminal_session(request: Request):
                        WHERE client_ip = %s
                          AND event_type IN ('LAPTOP_ACCESS', 'LAPTOP_EXPIRED', 'ADMIN_REVOKE',
                                              'VENDOR_DEVICE', 'VENDOR_DEVICE_REVOKED')
-                       ORDER BY created_at DESC LIMIT 1""",
+                       ORDER BY created_at DESC, id DESC LIMIT 1""",
                     (client_ip,)
                 )
                 row = cur.fetchone()

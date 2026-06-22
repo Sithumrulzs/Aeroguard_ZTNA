@@ -1,3 +1,4 @@
 pystray
 Pillow
 pyinstaller
+qrcode

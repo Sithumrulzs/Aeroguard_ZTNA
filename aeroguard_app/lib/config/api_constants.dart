@@ -9,7 +9,6 @@ class ApiConstants {
   static const String knockEndpoint = "$baseUrl/knock";
   static const String vendorKnockEndpoint = "$baseUrl/vendor_knock";
   static const String revokeAdminSessionEndpoint = "$baseUrl/revoke-admin-session";
-  static const String networkScanEndpoint         = "$baseUrl/network/scan";
 
   // ——— Central Auth – vendor provisioning (cloud, works off-network) ———
 
@@ -43,10 +42,16 @@ class ApiConstants {
   // ——— Vendor device approval ———
   static const String pendingVendorDevicesEndpoint =
       "$centralAuthUrl/api/v1/dashboard/pending-vendor-devices";
+  static const String vendorAttemptsEndpoint =
+      "$centralAuthUrl/api/v1/dashboard/vendor-attempts";
   static const String approveVendorDeviceEndpoint =
       "$centralAuthUrl/api/v1/admin/approve-vendor-device";
   static const String vendorDeviceStatusEndpoint =
       "$centralAuthUrl/api/v1/vendor/device-status";
+  static const String pairDeviceEndpoint =
+      "$centralAuthUrl/api/v1/vendor/pair-device";
+  static const String adminSessionStatusEndpoint =
+      "$centralAuthUrl/api/v1/admin/session-status";
 
   // ——— Timeouts ———
   static const int connectionTimeoutSeconds = 15;

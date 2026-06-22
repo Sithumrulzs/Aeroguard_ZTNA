@@ -10,6 +10,10 @@ class AuthService {
   static const String _deviceIdKey = 'aeroguard_device_id_from_backend';
   static const String _bioUsernameKey = 'aeroguard_bio_username';
   static const String _bioPasswordKey = 'aeroguard_bio_password';
+  static const String _vendorTokenKey   = 'aeroguard_vendor_token';
+  static const String _vendorNameKey    = 'aeroguard_vendor_name';
+  static const String _vendorCompanyKey = 'aeroguard_vendor_company';
+  static const String _vendorExpiresKey = 'aeroguard_vendor_expires';
 
   static final _vault = const FlutterSecureStorage();
 
@@ -162,6 +166,46 @@ class AuthService {
     await _vault.delete(key: _deviceIdKey);
     await clearBiometricCredentials();
     debugPrint('[+] User logged out');
+  }
+
+  // ── Vendor session persistence ──────────────────────────────────────────
+  // The vendor's identity lives entirely in the QR-derived token — closing
+  // the app loses all of it unless saved here, even though the session on
+  // the backend is still perfectly alive. Saved the moment a QR is scanned,
+  // cleared once the session is expired/revoked or the vendor signs out.
+
+  /// Persist the session right after a successful QR scan (or any later
+  /// state change worth remembering across an app restart).
+  static Future<void> saveVendorSession({
+    required String token,
+    required String vendorName,
+    required String company,
+    required String expiresAt,
+  }) async {
+    await _vault.write(key: _vendorTokenKey,   value: token);
+    await _vault.write(key: _vendorNameKey,    value: vendorName);
+    await _vault.write(key: _vendorCompanyKey, value: company);
+    await _vault.write(key: _vendorExpiresKey, value: expiresAt);
+  }
+
+  /// Returns the saved vendor session, or null if none exists.
+  static Future<Map<String, String>?> getVendorSession() async {
+    final token = await _vault.read(key: _vendorTokenKey);
+    if (token == null || token.isEmpty) return null;
+    return {
+      'token':      token,
+      'vendorName': await _vault.read(key: _vendorNameKey)    ?? '',
+      'company':    await _vault.read(key: _vendorCompanyKey) ?? '',
+      'expiresAt':  await _vault.read(key: _vendorExpiresKey) ?? '',
+    };
+  }
+
+  /// Clear the saved vendor session — call on expiry, revoke, or sign-out.
+  static Future<void> clearVendorSession() async {
+    await _vault.delete(key: _vendorTokenKey);
+    await _vault.delete(key: _vendorNameKey);
+    await _vault.delete(key: _vendorCompanyKey);
+    await _vault.delete(key: _vendorExpiresKey);
   }
 }
 

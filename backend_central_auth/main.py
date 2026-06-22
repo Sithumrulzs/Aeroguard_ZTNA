@@ -69,6 +69,17 @@ async def lifespan(app: FastAPI):
             with conn.cursor() as cur:
                 cur.execute("SELECT 1;")
                 cur.fetchone()
+                # No migration tooling in this project — ensure this table
+                # exists idempotently rather than requiring a manual step.
+                cur.execute(
+                    """CREATE TABLE IF NOT EXISTS public.device_pairings (
+                           pairing_code TEXT PRIMARY KEY,
+                           mac          TEXT NOT NULL,
+                           hostname     TEXT,
+                           local_ip     TEXT NOT NULL,
+                           created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+                       )"""
+                )
         print("[DATABASE STATUS] CONNECTED")
         print("[DATABASE STATUS] Secure link to Supabase PostgreSQL is fully functional.")
         print("[SYSTEM STATUS]   AeroGuard ZTNA engine is ready to accept inbound traffic.")
@@ -127,6 +138,16 @@ class AdminResetPayload(BaseModel):
 class RevokeVendorPayload(BaseModel):
     admin_username:  str
     vendor_username: str
+
+class RegisterPairingPayload(BaseModel):
+    pairing_code: str
+    mac:          str
+    hostname:     str = ""
+    local_ip:     str
+
+class PairDevicePayload(BaseModel):
+    token_hash:   str
+    pairing_code: str
 
 class LocationUpdatePayload(BaseModel):
     username:  str
@@ -727,15 +748,61 @@ async def get_pending_vendor_devices():
                               pending_device_ip, pending_device_mac,
                               device_approved, valid_until
                        FROM public.vendor_sessions
-                       WHERE pending_device_ip IS NOT NULL
+                       WHERE status = 'active'
                          AND (device_approved IS NULL OR device_approved = FALSE)
-                         AND status NOT IN ('expired', 'revoked')
                        ORDER BY created_at DESC"""
                 )
                 rows = cur.fetchall()
         return {"pending": [dict(r) for r in rows]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+
+@app.get("/api/v1/dashboard/vendor-attempts")
+async def get_vendor_attempts(limit: int = 30):
+    """
+    Recent vendor connection activity — successful connects AND failed/denied
+    attempts together, so the admin app can show a single timeline instead
+    of only ever surfacing the happy path.
+    """
+    event_types = (
+        'VENDOR_KNOCK', 'VENDOR_KNOCK_SPA', 'VENDOR_DEVICE',
+        'DEVICE_PAIRED', 'DEVICE_APPROVAL', 'VENDOR_DEVICE_REVOKED',
+        'LAPTOP_EXPIRED',
+    )
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT id, event_type, username, client_ip, status,
+                              details, created_at
+                       FROM public.audit_logs
+                       WHERE event_type = ANY(%s)
+                       ORDER BY created_at DESC, id DESC
+                       LIMIT %s""",
+                    (list(event_types), limit)
+                )
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    attempts = []
+    for r in rows:
+        mac = ""
+        try:
+            mac = (json.loads(r["details"]) or {}).get("mac", "")
+        except Exception:
+            pass
+        attempts.append({
+            "id":         r["id"],
+            "event_type": r["event_type"],
+            "username":   r["username"],
+            "client_ip":  r["client_ip"],
+            "mac":        mac,
+            "status":     r["status"],
+            "created_at": str(r["created_at"]),
+        })
+    return {"attempts": attempts}
 
 
 @app.post("/api/v1/admin/approve-vendor-device")
@@ -747,7 +814,7 @@ async def approve_vendor_device(payload: ApproveVendorDevicePayload, request: Re
             with conn.cursor() as cur:
                 if payload.approved:
                     if payload.override_ip:
-                        # Admin manually selected a device — override auto-detected IP/MAC
+                        # Admin manually selected a device via the network scan
                         cur.execute(
                             """UPDATE public.vendor_sessions
                                SET device_approved    = TRUE,
@@ -761,6 +828,21 @@ async def approve_vendor_device(payload: ApproveVendorDevicePayload, request: Re
                              payload.token_hash)
                         )
                     else:
+                        # No override given — only allow this if a device was
+                        # already selected previously. Approving with nothing
+                        # selected would grant access to no one, silently.
+                        cur.execute(
+                            "SELECT pending_device_ip FROM public.vendor_sessions "
+                            "WHERE qr_token = %s",
+                            (payload.token_hash,)
+                        )
+                        existing = cur.fetchone()
+                        if not existing or not existing["pending_device_ip"]:
+                            raise HTTPException(
+                                status_code=400,
+                                detail="No device selected — scan the network and "
+                                       "pick the vendor's device before approving."
+                            )
                         cur.execute(
                             """UPDATE public.vendor_sessions
                                SET device_approved    = TRUE,
@@ -778,6 +860,8 @@ async def approve_vendor_device(payload: ApproveVendorDevicePayload, request: Re
                            WHERE qr_token = %s""",
                         (payload.token_hash,)
                     )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
@@ -837,6 +921,111 @@ async def vendor_device_status(token: str):
         "device_ip":       row["pending_device_ip"] or "",
         "device_mac":      row["pending_device_mac"] or "",
     }
+
+
+@app.post("/api/v1/device/register-pairing")
+async def register_pairing(payload: RegisterPairingPayload):
+    """
+    Called by the generic terminal exe on launch — no vendor identity
+    involved yet, just "here is a code and what device generated it."
+    The exe is identical for every vendor; linking to a specific session
+    only happens once that vendor scans this code with their own phone.
+    """
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """INSERT INTO public.device_pairings
+                       (pairing_code, mac, hostname, local_ip, created_at)
+                       VALUES (%s, %s, %s, %s, %s)
+                       ON CONFLICT (pairing_code) DO UPDATE
+                       SET mac = EXCLUDED.mac, hostname = EXCLUDED.hostname,
+                           local_ip = EXCLUDED.local_ip, created_at = EXCLUDED.created_at""",
+                    (payload.pairing_code, payload.mac, payload.hostname,
+                     payload.local_ip, datetime.now(timezone.utc).isoformat())
+                )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+    return {"status": "registered"}
+
+
+@app.post("/api/v1/vendor/pair-device")
+async def pair_device(payload: PairDevicePayload, request: Request):
+    """
+    Called by the vendor's phone the instant it scans the laptop's QR.
+    Links the laptop's self-reported MAC/IP to this vendor's session —
+    proof of identity is possession of token_hash (already trusted for
+    the knock itself) plus physically reading a code off that laptop's
+    screen, not inference from network traffic.
+    """
+    client_ip = request.client.host
+    PAIRING_TTL_MINUTES = 15
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT mac, local_ip, created_at FROM public.device_pairings
+                       WHERE pairing_code = %s""",
+                    (payload.pairing_code,)
+                )
+                pairing = cur.fetchone()
+                if not pairing:
+                    raise HTTPException(status_code=404,
+                                        detail="Pairing code not found or already used.")
+
+                age = datetime.now(timezone.utc) - pairing["created_at"]
+                if age.total_seconds() > PAIRING_TTL_MINUTES * 60:
+                    raise HTTPException(status_code=410,
+                                        detail="Pairing code expired — restart the terminal exe.")
+
+                cur.execute(
+                    """UPDATE public.vendor_sessions
+                       SET pending_device_ip  = %s,
+                           pending_device_mac = %s
+                       WHERE qr_token = %s""",
+                    (pairing["local_ip"], pairing["mac"], payload.token_hash)
+                )
+                # One-time use — remove so the same code can't be replayed.
+                cur.execute(
+                    "DELETE FROM public.device_pairings WHERE pairing_code = %s",
+                    (payload.pairing_code,)
+                )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    insert_audit("DEVICE_PAIRED", payload.token_hash[:12], client_ip, "PAIRED",
+                 f"Laptop paired via QR code to vendor session")
+    print(f"[+] DEVICE PAIRED  token={payload.token_hash[:12]}... -> {pairing['local_ip']}")
+    return {"status": "paired", "ip": pairing["local_ip"], "mac": pairing["mac"]}
+
+
+@app.get("/api/v1/admin/session-status")
+async def admin_session_status(username: str):
+    """
+    Lets the admin app ask, purely over the internet (no gateway access
+    needed), whether its own last knock is still active — so reopening
+    or re-logging into the app shows the real current state instead of
+    resetting to idle regardless of what's actually true.
+    """
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT event_type, status, created_at
+                       FROM public.audit_logs
+                       WHERE username = %s
+                         AND event_type IN ('ZTNA_KNOCK', 'ADMIN_REVOKE', 'SESSION_EXPIRED')
+                       ORDER BY created_at DESC LIMIT 1""",
+                    (username,)
+                )
+                row = cur.fetchone()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    active = bool(row and row["event_type"] == "ZTNA_KNOCK" and row["status"] == "GRANTED")
+    return {"active": active, "since": str(row["created_at"]) if active else None}
 
 
 @app.get("/health")
