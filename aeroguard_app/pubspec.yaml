@@ -46,6 +46,8 @@ dependencies:
   qr_flutter: ^4.1.0
   flutter_svg: ^2.0.0
   flutter_local_notifications: ^18.0.1
+  video_player: ^2.11.1
+  audioplayers: ^6.7.1
 
 dev_dependencies:
   flutter_test:
@@ -78,6 +80,9 @@ flutter:
 
   assets:
     - assets/images/
+    - assets/video/aeroguard_intro_noword.mp4
+    - assets/audio/knock_activate.mp3
+    - assets/audio/transition_whoosh.mp3
 
   # To add other assets to your application, add them here:
   # assets:

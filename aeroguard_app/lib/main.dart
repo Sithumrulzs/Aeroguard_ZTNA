@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 
 // --- CORE SCREENS & CONFIG ---
 import 'screens/home_load_page.dart';
+import 'screens/intro_video_screen.dart';
 import 'config/environment_config.dart';
 
 void main() async {
@@ -32,6 +33,27 @@ void main() async {
   // await NotificationService.initialize();
 
   runApp(const AeroGuardApp());
+}
+
+// True only until the intro video has been shown once. A real cold start
+// resets this (fresh process); backgrounding and resuming the app (a "hot
+// resume") keeps the process alive, so the flag stays flipped and the video
+// never replays.
+bool _introShown = false;
+
+// Decides between the intro video and jumping straight to HomeLoadPage —
+// skips the video on a hot resume or when the OS has animations disabled.
+class _LaunchGate extends StatelessWidget {
+  const _LaunchGate();
+
+  @override
+  Widget build(BuildContext context) {
+    if (_introShown || MediaQuery.disableAnimationsOf(context)) {
+      return const HomeLoadPage();
+    }
+    _introShown = true;
+    return const IntroVideoScreen();
+  }
 }
 
 class AeroGuardApp extends StatelessWidget {
@@ -83,7 +105,7 @@ class AeroGuardApp extends StatelessWidget {
         ),
       ),
 
-      home: const HomeLoadPage(),
+      home: const _LaunchGate(),
     );
   }
 }

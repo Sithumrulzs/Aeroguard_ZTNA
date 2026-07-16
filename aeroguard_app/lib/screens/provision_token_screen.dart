@@ -126,7 +126,7 @@ class _ProvisionTokenScreenState extends State<ProvisionTokenScreen>
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
         title: const Row(
           children: [
-            Icon(Icons.error_outline, color: Colors.redAccent, size: 20),
+            Icon(Icons.error_outline, color: Color.fromARGB(255, 206, 75, 75), size: 20),
             SizedBox(width: 10),
             Text('Provision Failed',
                 style: TextStyle(color: Colors.white, fontSize: 15)),

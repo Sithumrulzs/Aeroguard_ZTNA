@@ -44,6 +44,8 @@ class ApiConstants {
       "$centralAuthUrl/api/v1/dashboard/pending-vendor-devices";
   static const String vendorAttemptsEndpoint =
       "$centralAuthUrl/api/v1/dashboard/vendor-attempts";
+  static const String knockHistoryEndpoint =
+      "$centralAuthUrl/api/v1/dashboard/knock-history";
   static const String approveVendorDeviceEndpoint =
       "$centralAuthUrl/api/v1/admin/approve-vendor-device";
   static const String vendorDeviceStatusEndpoint =

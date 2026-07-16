@@ -8,11 +8,12 @@ LAN to fake.
 
 import tkinter as tk
 from tkinter import scrolledtext
+import tkinter.font as tkfont
 import threading, sqlite3, os, sys, datetime, webbrowser, time, math
 import urllib.request, urllib.error, json, secrets, socket, uuid
 import pystray
 import qrcode
-from PIL import Image, ImageTk
+from PIL import Image, ImageTk, ImageDraw, ImageFilter
 
 # ══════════════════════════════════════════════════
 #  CONFIG
@@ -32,6 +33,7 @@ FIDS_URL             = f"http://{FIDS_HOST}:{FIDS_PORT}"
 # moment they scan the QR this exe generates, no typing, no per-vendor build.
 CENTRAL_AUTH_URL       = "https://aeroguard-ztna.onrender.com"
 REGISTER_PAIRING_URL   = f"{CENTRAL_AUTH_URL}/api/v1/device/register-pairing"
+IS_ADMIN_LAPTOP_URL    = f"{CENTRAL_AUTH_URL}/api/v1/device/is-admin-laptop"
 
 _here = os.path.dirname(os.path.abspath(sys.argv[0]))
 DB_CANDIDATES = [
@@ -73,12 +75,12 @@ SELECT_BG = "#0D2A3D"
 # matching the mobile app's typography instead of a typewriter look.
 MONO      = "Consolas"
 SANS      = "Segoe UI"
-FONT      = (MONO, 11)
-FONT_B    = (MONO, 11, "bold")
-FONT_LG   = (MONO, 13, "bold")
-UI_FONT   = (SANS, 10)
-UI_FONT_B = (SANS, 10, "bold")
-UI_FONT_LG = (SANS, 15, "bold")
+FONT      = (MONO, 12)
+FONT_B    = (MONO, 12, "bold")
+FONT_LG   = (MONO, 14, "bold")
+UI_FONT   = (SANS, 11)
+UI_FONT_B = (SANS, 11, "bold")
+UI_FONT_LG = (SANS, 16, "bold")
 
 # Matches the exact gradient used on aeroguard_app's sign-in/load screens.
 GRADIENT_TOP    = "#050810"
@@ -98,6 +100,9 @@ def draw_vertical_gradient(canvas, width, height, top_color, bottom_color):
     for y in range(height):
         canvas.create_line(0, y, width, y, fill=_lerp_color(top_color, bottom_color, y / height))
 
+def _measure(font, text):
+    return tkfont.Font(font=font).measure(text)
+
 def draw_rounded_rect(canvas, x1, y1, x2, y2, r, **kwargs):
     points = [
         x1 + r, y1,  x2 - r, y1,  x2, y1,  x2, y1 + r,
@@ -105,6 +110,121 @@ def draw_rounded_rect(canvas, x1, y1, x2, y2, r, **kwargs):
         x1, y2,  x1, y2 - r,  x1, y1 + r,  x1, y1,
     ]
     return canvas.create_polygon(points, smooth=True, **kwargs)
+
+# ══════════════════════════════════════════════════
+#  REAL BLUR RENDERING  -  Tkinter's canvas has no native blur/shadow,
+#  so true glassmorphism (soft drop shadows, frosted tint, a logo that
+#  glows rather than just changing a flat fill) is pre-rendered with
+#  Pillow at 2x and downscaled — actual Gaussian blur, not a fake.
+# ══════════════════════════════════════════════════
+def make_background(width, height, top_color, bottom_color, accent_color):
+    """The window backdrop — a smoothly supersampled gradient with soft
+    blurred color blobs bleeding through, the actual source of a 'glass'
+    look (real translucency blended at render time against this, not a
+    window-level alpha that would also wash out the text on top)."""
+    scale = 2
+    w, h = width * scale, height * scale
+    top, bottom = _hex_to_rgb(top_color), _hex_to_rgb(bottom_color)
+    grad = Image.new("RGB", (1, h))
+    for y in range(h):
+        t = y / max(h - 1, 1)
+        grad.putpixel((0, y), tuple(int(top[i] + (bottom[i] - top[i]) * t) for i in range(3)))
+    img = grad.resize((w, h)).convert("RGBA")
+
+    blobs = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    r, g, b = _hex_to_rgb(accent_color)
+    bd = ImageDraw.Draw(blobs)
+    bd.ellipse([w * 0.50, -h * 0.05, w * 1.05, h * 0.38], fill=(r, g, b, 100))
+    bd.ellipse([-w * 0.30, h * 0.62, w * 0.28, h * 1.10], fill=(r, g, b, 75))
+    blobs = blobs.filter(ImageFilter.GaussianBlur(w * 0.07))
+    img.alpha_composite(blobs)
+
+    return img.resize((width, height), Image.LANCZOS)
+
+def make_glass_card(width, height, radius, tint_rgba, shadow_alpha=110, blur=16):
+    """A rounded glass panel with a real soft drop shadow and a faint
+    bright top-edge highlight, composited as one image."""
+    scale = 2
+    w, h = width * scale, height * scale
+    r = radius * scale
+    out = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+
+    shadow = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(shadow).rounded_rectangle(
+        [scale * 2, scale * 8, w - scale * 2, h - scale * 2], radius=r,
+        fill=(0, 0, 0, shadow_alpha))
+    shadow = shadow.filter(ImageFilter.GaussianBlur(blur * scale / 2))
+    out.alpha_composite(shadow)
+
+    card = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(card).rounded_rectangle([0, 0, w - 1, h - 1], radius=r, fill=tint_rgba)
+    out.alpha_composite(card)
+
+    highlight = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(highlight).rounded_rectangle(
+        [scale, scale, w - scale, h - scale], radius=r,
+        outline=(255, 255, 255, 50), width=scale * 2)
+    out.alpha_composite(highlight)
+
+    return out.resize((width, height), Image.LANCZOS)
+
+def make_shadow_strip(width, height=14):
+    """A soft horizontal drop shadow — used under the terminal's header
+    bar so it reads as a glass panel floating above the content instead
+    of a flat colored rectangle with a hard line under it."""
+    scale = 2
+    w, h = max(int(width * scale), 2), height * scale
+    img = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(img).rectangle([0, 0, w, h * 0.4], fill=(0, 0, 0, 90))
+    img = img.filter(ImageFilter.GaussianBlur(h * 0.18))
+    return img.resize((max(int(width), 1), height), Image.LANCZOS)
+
+def make_logo_glow(size, pulse_color, intensity, logo_img=None, ripple_phase=0.0):
+    """One composited image: a soft core glow plus real blurred ripple
+    rings that continuously expand outward and fade — like a sonar ping
+    rendered with actual Gaussian blur instead of hard canvas outlines —
+    with the crisp logo centered on top. Regenerated each frame so the
+    glow and ripples animate while the logo itself never moves, resizes,
+    or distorts."""
+    scale = 2
+    big = size * scale
+    cx = cy = big / 2
+    out = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    r, g, b = _hex_to_rgb(pulse_color)
+
+    # Steady core glow — the logo's constant soft presence.
+    glow = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    alpha = int(90 + intensity * 110)
+    gr = big * 0.27
+    ImageDraw.Draw(glow).ellipse([cx - gr, cy - gr, cx + gr, cy + gr],
+                                  fill=(r, g, b, alpha))
+    glow = glow.filter(ImageFilter.GaussianBlur(big * 0.07))
+    out.alpha_composite(glow)
+
+    # Two staggered ripple rings, continuously expanding and fading —
+    # drawn as a real ring (not filled) then blurred for a soft glowing
+    # edge instead of a crisp outline.
+    rings = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+    rd = ImageDraw.Draw(rings)
+    r_min, r_max = big * 0.24, big * 0.50
+    ring_w = max(int(big * 0.045), 3)
+    for offset in (0.0, 0.5):
+        phase  = (ripple_phase + offset) % 1.0
+        radius = r_min + phase * (r_max - r_min)
+        fade   = 1.0 - phase
+        ring_alpha = int(fade * 215)
+        if ring_alpha > 2:
+            rd.ellipse([cx - radius, cy - radius, cx + radius, cy + radius],
+                       outline=(r, g, b, ring_alpha), width=ring_w)
+    rings = rings.filter(ImageFilter.GaussianBlur(big * 0.028))
+    out.alpha_composite(rings)
+
+    if logo_img is not None:
+        logo = logo_img.copy()
+        logo.thumbnail((int(big * 0.34), int(big * 0.34)), Image.LANCZOS)
+        out.alpha_composite(logo, (int(cx - logo.width / 2), int(cy - logo.height / 2)))
+
+    return out.resize((size, size), Image.LANCZOS)
 
 # ══════════════════════════════════════════════════
 #  DB + FIDS HELPERS
@@ -157,6 +277,23 @@ def _own_local_ip():
     finally:
         s.close()
 
+def is_admin_laptop():
+    """
+    Asks central_auth whether this machine's MAC is a pre-registered admin
+    workstation. Admin access is granted purely by MAC resolution — no
+    pairing involved — so a recognized admin laptop should never show a
+    QR at all. Defaults to False (vendor-style fallback) on any failure,
+    since failing to confirm admin status should never hide pairing UI
+    that a vendor might actually need.
+    """
+    try:
+        req = urllib.request.Request(
+            f"{IS_ADMIN_LAPTOP_URL}?mac={_own_mac()}", method="GET")
+        resp = urllib.request.urlopen(req, timeout=6)
+        return bool(json.loads(resp.read().decode()).get("is_admin"))
+    except Exception:
+        return False
+
 def register_pairing(pairing_code):
     """
     Self-report this machine's identity against a fresh pairing code —
@@ -191,8 +328,8 @@ class AeroGuardTerminal:
 
         self.root.title(f"AeroGuard ZTNA  |  {session['user']}")
         self.root.configure(bg=BG)
-        self.root.geometry("1100x700")
-        self.root.minsize(800, 500)
+        self.root.geometry("1320x840")
+        self.root.minsize(960, 600)
         try:
             self.root.iconbitmap(ICON_ICO)
         except Exception:
@@ -207,46 +344,61 @@ class AeroGuardTerminal:
     # ─────────────────────────────────────────────
     def _build_ui(self):
 
-        # ── STATUS BAR (top, very thin) ──────────
-        bar = tk.Frame(self.root, bg=BAR_BG, pady=8)
+        # ── STATUS BAR — glass pill badges, same visual language as the
+        #    pairing window, instead of flat rectangular Label blocks ────
+        header_h = 58
+        bar = self.header_canvas = tk.Canvas(self.root, height=header_h,
+                                              bg=BAR_BG, highlightthickness=0, bd=0)
         bar.pack(fill="x", side="top")
+        cy = header_h / 2
+        x = 16
 
         try:
             logo_src = Image.open(ICON_PNG).convert("RGBA")
-            logo_src.thumbnail((24, 24), Image.LANCZOS)
+            logo_src.thumbnail((28, 28), Image.LANCZOS)
             self._logo_img = ImageTk.PhotoImage(logo_src)
-            tk.Label(bar, image=self._logo_img,
-                     bg=BAR_BG).pack(side="left", padx=(12, 8))
+            bar.create_image(x + 14, cy, image=self._logo_img)
+            x += 28 + 12
         except Exception:
             pass
 
-        tk.Label(bar, text="AeroGuard ZTNA",
-                 fg=FG_WHITE, bg=BAR_BG, font=UI_FONT_B).pack(side="left", padx=(0, 10))
+        bar.create_text(x, cy, text="AeroGuard ZTNA", fill=FG_WHITE,
+                         font=UI_FONT_B, anchor="w")
+        x += _measure(UI_FONT_B, "AeroGuard ZTNA") + 18
 
-        self.operator_lbl = tk.Label(
-            bar, text=f"  {self.session['user']}  ",
-            fg=BG, bg=FG, font=UI_FONT_B)
-        self.operator_lbl.pack(side="left", padx=(0, 6))
+        def _pill(text, fg, bg, min_w=0):
+            nonlocal x
+            w = max(_measure(UI_FONT_B, text) + 22, min_w)
+            x1, x2 = x, x + w
+            bg_id = draw_rounded_rect(bar, x1, cy - 13, x2, cy + 13, 13,
+                                       fill=bg, outline="")
+            txt_id = bar.create_text((x1 + x2) / 2, cy, text=text,
+                                      fill=fg, font=UI_FONT_B)
+            x = x2 + 6
+            return bg_id, txt_id
 
-        self.gw_lbl = tk.Label(bar, text="  GATEWAY OPEN  ",
-                                fg=BG, bg=FG_GREEN, font=UI_FONT_B)
-        self.gw_lbl.pack(side="left", padx=3)
+        _pill(self.session["user"], BG, FG)
+        _pill("GATEWAY OPEN", BG, FG_GREEN)
 
-        self.db_lbl = tk.Label(bar, text="  DB --  ",
-                                fg=BG, bg=FG_DIM, font=UI_FONT_B)
-        self.db_lbl.pack(side="left", padx=3)
+        # DB/FIDS badges share one fixed width (sized for their longest
+        # possible text) so updating the status later never overflows
+        # the pill — only fill/text change, the shape never needs to.
+        badge_w = _measure(UI_FONT_B, "FIDS OFF") + 22
+        self.db_bg,   self.db_txt   = _pill("DB --",   BG, FG_DIM, min_w=badge_w)
+        self.fids_bg, self.fids_txt = _pill("FIDS --", BG, FG_DIM, min_w=badge_w)
 
-        self.fids_lbl = tk.Label(bar, text="  FIDS --  ",
-                                  fg=BG, bg=FG_DIM, font=UI_FONT_B)
-        self.fids_lbl.pack(side="left", padx=3)
-
-        self.clock_lbl = tk.Label(bar, text="",
-                                   fg=FG_DIM, bg=BAR_BG, font=UI_FONT)
-        self.clock_lbl.pack(side="right", padx=12)
+        self.clock_text = bar.create_text(0, cy, text="", fill=FG_DIM,
+                                           font=UI_FONT, anchor="e")
+        bar.bind("<Configure>", self._on_header_resize)
         self._tick()
 
-        # ── SEPARATOR ───────────────────────────
-        tk.Frame(self.root, bg="#123247", height=2).pack(fill="x")
+        # ── SEPARATOR — a real soft drop shadow so the header reads as a
+        #    glass panel floating above the console, not a flat bar with
+        #    a hard line under it. Regenerated whenever the window resizes.
+        self.shadow_canvas = tk.Canvas(self.root, height=10, bg=BG,
+                                        highlightthickness=0, bd=0)
+        self.shadow_canvas.pack(fill="x")
+        self.shadow_canvas.bind("<Configure>", self._on_shadow_resize)
 
         # ── OUTPUT AREA ─────────────────────────
         self.out = scrolledtext.ScrolledText(
@@ -307,9 +459,22 @@ class AeroGuardTerminal:
 
     # ─────────────────────────────────────────────
     def _tick(self):
-        self.clock_lbl.config(
-            text=datetime.datetime.now().strftime("%Y-%m-%d  %H:%M:%S  "))
+        self.header_canvas.itemconfig(
+            self.clock_text,
+            text=datetime.datetime.now().strftime("%Y-%m-%d  %H:%M:%S"))
         self.root.after(1000, self._tick)
+
+    def _on_header_resize(self, event):
+        self.header_canvas.coords(self.clock_text, event.width - 14,
+                                   event.height / 2)
+
+    def _on_shadow_resize(self, event):
+        if event.width < 2:
+            return
+        img = make_shadow_strip(event.width, height=self.shadow_canvas.winfo_height() or 10)
+        self._shadow_photo = ImageTk.PhotoImage(img)
+        self.shadow_canvas.delete("all")
+        self.shadow_canvas.create_image(0, 0, image=self._shadow_photo, anchor="nw")
 
     # ─────────────────────────────────────────────
     #  WRITE HELPERS
@@ -350,12 +515,14 @@ class AeroGuardTerminal:
         db_ok = os.path.exists(DB_PATH)
         if db_ok:
             self.wl("  [DB]    airport_system.db ............. CONNECTED", "ok")
-            self.root.after(0, lambda: self.db_lbl.config(
-                text="  DB OK  ", bg=FG_GREEN))
+            self.root.after(0, lambda: (
+                self.header_canvas.itemconfig(self.db_bg, fill=FG_GREEN),
+                self.header_canvas.itemconfig(self.db_txt, text="DB OK")))
         else:
             self.wl(f"  [DB]    airport_system.db ............. NOT FOUND", "err")
-            self.root.after(0, lambda: self.db_lbl.config(
-                text="  DB ERR  ", bg=FG_RED))
+            self.root.after(0, lambda: (
+                self.header_canvas.itemconfig(self.db_bg, fill=FG_RED),
+                self.header_canvas.itemconfig(self.db_txt, text="DB ERR")))
 
         # FIDS check async
         self.wl(f"  [FIDS]  Connecting to {FIDS_URL} ...", "dim")
@@ -365,7 +532,8 @@ class AeroGuardTerminal:
             if data:
                 self.root.after(0, lambda: (
                     self.wl("  [FIDS]  Dashboard ..................... ONLINE", "ok"),
-                    self.fids_lbl.config(text="  FIDS OK  ", bg=FG_GREEN),
+                    self.header_canvas.itemconfig(self.fids_bg, fill=FG_GREEN),
+                    self.header_canvas.itemconfig(self.fids_txt, text="FIDS OK"),
                     self.wl(),
                     self.wl("  Gateway is OPEN. Type  help  to see all commands.", "cyan"),
                     self.wl()
@@ -373,7 +541,8 @@ class AeroGuardTerminal:
             else:
                 self.root.after(0, lambda: (
                     self.wl("  [FIDS]  Dashboard ..................... OFFLINE", "warn"),
-                    self.fids_lbl.config(text="  FIDS OFF  ", bg=FG_ORANGE),
+                    self.header_canvas.itemconfig(self.fids_bg, fill=FG_ORANGE),
+                    self.header_canvas.itemconfig(self.fids_txt, text="FIDS OFF"),
                     self.wl(),
                     self.wl("  Gateway is OPEN. Type  help  to see all commands.", "cyan"),
                     self.wl()
@@ -861,98 +1030,128 @@ class AeroGuardTerminal:
 #  typing, no per-vendor build. Re-showable from the tray at any time.
 # ══════════════════════════════════════════════════
 class PairingWindow:
-    WIDTH, HEIGHT = 380, 640
+    WIDTH = 360   # compact, like the original — quality comes from how it's
+                  # rendered (supersampled + real blur), not from being bigger
 
     def __init__(self, root, pairing_code):
         self.win = tk.Toplevel(root)
         self.win.title("AeroGuard ZTNA — Pair This Device")
-        self.win.geometry(f"{self.WIDTH}x{self.HEIGHT}")
         self.win.resizable(False, False)
         try:
             self.win.iconbitmap(ICON_ICO)
         except Exception:
             pass
-        try:
-            self.win.attributes("-alpha", 0.97)   # soft glass transparency
-        except Exception:
-            pass
+        # No window-level alpha — Tkinter's -alpha blends the *entire*
+        # window uniformly, which would wash out the text too. The glass
+        # look instead comes from the rendered images' own transparency,
+        # blended correctly against the background at draw time, so the
+        # window itself stays fully opaque and every word stays crisp.
         self.win.protocol("WM_DELETE_WINDOW", self.win.withdraw)
 
         self._closing      = False
-        self._pulse_phase  = 0.0
-        self._pulse_color  = FG          # cyan while waiting, green on approval
-        self._pulse_job    = None
+        self._pulse_phase   = 0.0
+        self._ripple_phase  = 0.0
+        self._pulse_color   = FG          # cyan while waiting, green on approval
+        self._pulse_job     = None
+        self._glow_size     = 168         # spreads well beyond the logo itself
+        self._logo_src      = None
+
+        # ── Layout pass — a running cursor places every element, then the
+        # window is sized to exactly fit what was drawn. Nothing is ever
+        # guessed/cramped, and nothing can overflow the visible card. ─────
+        margin = 20
+        cx = self.WIDTH / 2
+        y = margin + 22
+
+        glow_zone_h = self._glow_size + 10
+        logo_cy = y + glow_zone_h / 2
+        y += glow_zone_h
+
+        wordmark_y = y; y += 24
+        subtitle_y = y; y += 28
+        label_y    = y; y += 22
+        instr_y    = y; y += 28
+
+        qr_size, qr_pad = 188, 12
+        qr_chip = qr_size + qr_pad * 2
+        qr_y1 = y
+        qr_y2 = y + qr_chip
+        y = qr_y2 + 16
+
+        code_y   = y; y += 22
+        status_y = y; y += 26
+
+        btn_w, btn_h = 104, 32
+        btn_y1 = y
+        y = btn_y1 + btn_h + margin + 24   # bottom inner padding
+
+        self.HEIGHT = int(y)
+        self.win.geometry(f"{self.WIDTH}x{self.HEIGHT}")
 
         c = self.canvas = tk.Canvas(self.win, width=self.WIDTH, height=self.HEIGHT,
                                      highlightthickness=0, bd=0)
         c.pack(fill="both", expand=True)
-        draw_vertical_gradient(c, self.WIDTH, self.HEIGHT, GRADIENT_TOP, GRADIENT_BOTTOM)
 
-        # ── Glass panel — a single frosted-looking card holding everything,
-        #    instead of plain text floating on the gradient ───────────────
-        self._glass_fill = _lerp_color(GRADIENT_TOP, "#3D5C82", 0.30)
-        draw_rounded_rect(c, 20, 20, self.WIDTH - 20, self.HEIGHT - 20, 26,
-                           fill=self._glass_fill, outline=FG, width=1)
-        # a thin inner highlight line to sell the "glass edge" look
-        draw_rounded_rect(c, 23, 23, self.WIDTH - 23, self.HEIGHT - 23, 24,
-                           fill="", outline=FG_WHITE, width=1)
+        # ── Backdrop — smooth supersampled gradient with soft blurred
+        # color blobs bleeding through, the actual depth cue a flat
+        # two-color gradient never had ───────────────────────────────────
+        bg_img = make_background(self.WIDTH, self.HEIGHT, GRADIENT_TOP, GRADIENT_BOTTOM, FG)
+        self._bg_photo = ImageTk.PhotoImage(bg_img)
+        c.create_image(0, 0, image=self._bg_photo, anchor="nw")
 
-        # ── Pulsing rings + full-resolution logo ────────────────────────
-        self._cx, self._cy = self.WIDTH / 2, 124
-        self._ring_outer = c.create_oval(0, 0, 0, 0, outline=FG, width=2)
-        self._ring_mid   = c.create_oval(0, 0, 0, 0, outline=FG, width=1)
+        # ── True glassmorphism — a real soft drop shadow + a genuinely
+        # translucent frosted tint (the blobs above show faintly through
+        # it) + a bright top-edge highlight, all one pre-rendered image ──
+        card_w, card_h = self.WIDTH - margin * 2, self.HEIGHT - margin * 2
+        glass_img = make_glass_card(card_w, card_h, 26, (66, 98, 138, 70))
+        self._glass_photo = ImageTk.PhotoImage(glass_img)
+        c.create_image(margin, margin, image=self._glass_photo, anchor="nw")
+        self._glass_fill = _lerp_color(GRADIENT_TOP, "#3D5C82", 0.24)  # for text contrast math only
+
+        # ── Logo glow — a real blurred shadow rendered with Pillow, fully
+        # isolated in its own image so animating it never touches any
+        # text item. The logo inside never moves, resizes, or distorts. ──
+        self._cx, self._cy = cx, logo_cy
         try:
-            logo_src = Image.open(ICON_PNG).convert("RGBA")
-            logo_src.thumbnail((108, 108), Image.LANCZOS)   # full-quality, large
-            self._logo_photo = ImageTk.PhotoImage(logo_src)
-            c.create_image(self._cx, self._cy, image=self._logo_photo)
+            self._logo_src = Image.open(ICON_PNG).convert("RGBA")
         except Exception:
-            pass
+            self._logo_src = None
+        glow_img = make_logo_glow(self._glow_size, self._pulse_color, 0.3, self._logo_src)
+        self._glow_photo = ImageTk.PhotoImage(glow_img)
+        self._glow_item = c.create_image(cx, logo_cy, image=self._glow_photo)
 
-        # ── Wordmark ─────────────────────────────────────────────────────
-        c.create_text(self.WIDTH / 2, 208, text="AEROGUARD",
-                       fill=FG_WHITE, font=(SANS, 17, "bold"))
-        c.create_text(self.WIDTH / 2, 231, text="ZERO TRUST NETWORK ACCESS",
+        c.create_text(cx, wordmark_y, text="AEROGUARD",
+                       fill=FG_WHITE, font=(SANS, 18, "bold"))
+        c.create_text(cx, subtitle_y, text="ZERO TRUST NETWORK ACCESS",
                        fill=FG, font=(SANS, 8, "bold"))
-
-        c.create_text(self.WIDTH / 2, 266, text="PAIR THIS DEVICE",
+        c.create_text(cx, label_y, text="PAIR THIS DEVICE",
                        fill=FG_DIM, font=UI_FONT_B)
-        c.create_text(self.WIDTH / 2, 286,
-                       text="Open the AeroGuard app, then Scan Laptop",
+        c.create_text(cx, instr_y, text="Open the AeroGuard app, then Scan Laptop",
                        fill=FG_DIM, font=UI_FONT)
 
         # ── QR sits on a true-white chip — kept high-contrast on purpose
-        #    so it stays reliably scannable inside the tinted glass card ──
-        qr_size = 224
-        pad = 14
-        qx1 = self.WIDTH / 2 - qr_size / 2 - pad
-        qy1 = 310
-        qx2 = qx1 + qr_size + pad * 2
-        qy2 = qy1 + qr_size + pad * 2
-        draw_rounded_rect(c, qx1, qy1, qx2, qy2, 16, fill="#FFFFFF", outline="")
-
+        # so it stays reliably scannable. Rendered at 4x its display size
+        # and downscaled with Lanczos so the modules stay crisp instead
+        # of looking jagged at a smaller physical size ────────────────────
+        qx1 = cx - qr_chip / 2
+        draw_rounded_rect(c, qx1, qr_y1, qx1 + qr_chip, qr_y2, 16, fill="#FFFFFF", outline="")
         qr_img = qrcode.make(
             json.dumps({"type": "aeroguard_device_pairing",
                         "pairing_code": pairing_code}),
             border=2,
-        ).resize((qr_size, qr_size))
+        ).convert("L").resize((qr_size, qr_size), Image.LANCZOS)
         self._qr_photo = ImageTk.PhotoImage(qr_img)
-        c.create_image(self.WIDTH / 2, (qy1 + qy2) / 2, image=self._qr_photo)
+        c.create_image(cx, (qr_y1 + qr_y2) / 2, image=self._qr_photo)
 
-        c.create_text(self.WIDTH / 2, qy2 + 20, text=pairing_code,
-                      fill=FG_DIM, font=(MONO, 11))
-
-        self.status_text = c.create_text(
-            self.WIDTH / 2, qy2 + 42, text="Waiting for scan...",
-            fill=FG_DIM, font=UI_FONT)
+        c.create_text(cx, code_y, text=pairing_code, fill=FG_DIM, font=(MONO, 12))
+        self.status_text = c.create_text(cx, status_y, text="Waiting for scan...",
+                                          fill=FG_DIM, font=UI_FONT)
 
         # ── Hide button ──────────────────────────────────────────────────
-        btn_w, btn_h = 100, 32
-        bx1 = self.WIDTH / 2 - btn_w / 2
-        by1 = qy2 + 62
-        hide_btn = draw_rounded_rect(c, bx1, by1, bx1 + btn_w, by1 + btn_h, 8,
+        bx1 = cx - btn_w / 2
+        hide_btn = draw_rounded_rect(c, bx1, btn_y1, bx1 + btn_w, btn_y1 + btn_h, 9,
                                       fill="", outline=FG_DIM)
-        hide_txt = c.create_text(self.WIDTH / 2, by1 + btn_h / 2,
+        hide_txt = c.create_text(cx, btn_y1 + btn_h / 2,
                                   text="HIDE", fill=FG_DIM, font=UI_FONT_B)
         for item in (hide_btn, hide_txt):
             c.tag_bind(item, "<Button-1>", lambda e: self.win.withdraw())
@@ -961,25 +1160,20 @@ class PairingWindow:
 
         self._animate()
 
-    # ── continuous pulse — cyan while waiting, switched to green the
-    #    instant the admin approves (see play_approved_and_close) ────────
+    # ── continuous color pulse — no motion, no resizing of the logo, and
+    #    nothing else on the card is ever touched. Only the glow image
+    #    itself is regenerated each frame, with a real Gaussian blur. ────
     def _animate(self):
         if self._closing:
             return
-        self._pulse_phase += 0.07
-        t = (math.sin(self._pulse_phase) + 1) / 2   # 0..1 breathing curve
-        r_outer = 52 + t * 16
-        r_mid   = 40 + t * 11
-        cx, cy = self._cx, self._cy
-        self.canvas.coords(self._ring_outer, cx - r_outer, cy - r_outer,
-                            cx + r_outer, cy + r_outer)
-        self.canvas.coords(self._ring_mid, cx - r_mid, cy - r_mid,
-                            cx + r_mid, cy + r_mid)
-        self.canvas.itemconfig(self._ring_outer,
-            outline=_lerp_color(self._glass_fill, self._pulse_color, 0.3 + t * 0.6))
-        self.canvas.itemconfig(self._ring_mid,
-            outline=_lerp_color(self._glass_fill, self._pulse_color, 0.45 + t * 0.55))
-        self._pulse_job = self.win.after(40, self._animate)
+        self._pulse_phase  += 0.072
+        self._ripple_phase = (self._ripple_phase + 0.020) % 1.0
+        t = (math.sin(self._pulse_phase) + 1) / 2   # smooth 0..1 breathing curve
+        glow_img = make_logo_glow(self._glow_size, self._pulse_color, t,
+                                   self._logo_src, self._ripple_phase)
+        self._glow_photo = ImageTk.PhotoImage(glow_img)
+        self.canvas.itemconfig(self._glow_item, image=self._glow_photo)
+        self._pulse_job = self.win.after(65, self._animate)
 
     def show(self):
         self.win.deiconify()
@@ -990,7 +1184,7 @@ class PairingWindow:
 
     def play_approved_and_close(self, on_done):
         """
-        Admin just approved this device — the rings glow green for a
+        Admin just approved this device — the glow turns green for a
         couple of beats, then the whole window closes for good and the
         real terminal takes over. on_done() is called after destruction.
         """
@@ -998,6 +1192,26 @@ class PairingWindow:
         self._pulse_color = FG_GREEN
         self.set_status("Device approved — connecting...")
         self.win.after(950, lambda: self._finish_close(on_done))
+
+    def play_declined(self, message="Declined — ask the vendor to rescan"):
+        """
+        The admin explicitly declined this device, or the pairing code
+        didn't match any vendor session. The glow turns red with a clear
+        reason, then settles back to the normal waiting pulse so a fresh
+        scan attempt can succeed without restarting the exe.
+        """
+        if self._closing:
+            return
+        self.show()
+        self._pulse_color = FG_RED
+        self.set_status(message)
+        self.win.after(4000, self._reset_to_waiting)
+
+    def _reset_to_waiting(self):
+        if self._closing:
+            return
+        self._pulse_color = FG
+        self.set_status("Waiting for scan...")
 
     def _finish_close(self, on_done):
         self._closing = True
@@ -1023,8 +1237,8 @@ class TrayApp:
         self.tray         = None
         self._withdraw_job = None
         self._miss_count   = 0
-        self.pairing_code  = secrets.token_hex(3).upper()   # e.g. "A3F9C2"
-        self.pairing_win   = PairingWindow(root, self.pairing_code)
+        self.pairing_code  = None
+        self.pairing_win   = None    # stays None entirely on admin laptops
 
         root.withdraw()                 # silent from the first frame
         try:
@@ -1034,8 +1248,25 @@ class TrayApp:
 
         self._start_tray()
         self._schedule_poll()
+        threading.Thread(target=self._decide_pairing, daemon=True).start()
+
+    # ── Admin laptops are recognized by MAC and granted access directly —
+    #    no pairing, no QR, ever. Anything else falls back to vendor-style
+    #    QR pairing. Checked once at startup in the background so it never
+    #    delays the tray icon or the grant-polling loop coming up ─────────
+    def _decide_pairing(self):
+        if is_admin_laptop():
+            return
+        self.pairing_code = secrets.token_hex(3).upper()   # e.g. "A3F9C2"
+        self.root.after(0, self._create_pairing_window)
         self._start_pairing_refresh()
-        self.root.after(300, self.pairing_win.show)
+
+    def _create_pairing_window(self):
+        if self.terminal is not None:
+            return   # already granted before the admin-check even finished
+        self.pairing_win = PairingWindow(self.root, self.pairing_code)
+        self.pairing_win.show()
+        self._set_tray_status("Waiting for pairing")
 
     # ── pairing — kept fresh for as long as this exe keeps running, so
     #    issuing it the day before a visit doesn't let the code expire
@@ -1057,7 +1288,6 @@ class TrayApp:
     def _start_tray(self):
         menu = pystray.Menu(
             pystray.MenuItem("Show Terminal", self._show, default=True),
-            pystray.MenuItem("Show Pairing QR", self._show_pairing),
             pystray.MenuItem("Status: Waiting for authorization",
                               None, enabled=False),
             pystray.MenuItem("Exit", self._quit),
@@ -1070,19 +1300,21 @@ class TrayApp:
         if not self.tray:
             return
         self.tray.title = f"AeroGuard ZTNA — {text}"
-        self.tray.menu = pystray.Menu(
-            pystray.MenuItem("Show Terminal", self._show, default=True),
-            pystray.MenuItem("Show Pairing QR", self._show_pairing),
+        items = [pystray.MenuItem("Show Terminal", self._show, default=True)]
+        if self.pairing_win is not None:   # vendor-mode device only
+            items.append(pystray.MenuItem("Show Pairing QR", self._show_pairing))
+        items += [
             pystray.MenuItem(f"Status: {text}", None, enabled=False),
             pystray.MenuItem("Exit", self._quit),
-        )
+        ]
+        self.tray.menu = pystray.Menu(*items)
 
     def _show_pairing(self, icon=None, item=None):
         # Once a real session is granted, the pairing window is torn down
         # along with everything else from a prior revoke — nothing left
         # to re-show, and that's fine, pairing has already done its job.
         def _do():
-            if self.pairing_win.win.winfo_exists():
+            if self.pairing_win is not None and self.pairing_win.win.winfo_exists():
                 self.pairing_win.show()
         self.root.after(0, _do)
 
@@ -1144,11 +1376,12 @@ class TrayApp:
             self._set_tray_status(f"Active — {session['user']}")
             self._bring_to_front()
 
-        # First grant of this exe's life: the pairing window is still up,
-        # so play the green "approved" pulse on it before handing off to
-        # the terminal. On any later regrant (after a revoke), it's already
-        # been destroyed — go straight to the terminal.
-        if self.pairing_win.win.winfo_exists():
+        # First grant of this exe's life on a vendor-mode device: the
+        # pairing window is still up, so play the green "approved" pulse
+        # before handing off to the terminal. Admin laptops never had one
+        # to begin with, and any later regrant (after a revoke) finds it
+        # already destroyed — both go straight to the terminal.
+        if self.pairing_win is not None and self.pairing_win.win.winfo_exists():
             self.pairing_win.play_approved_and_close(_open_terminal)
         else:
             _open_terminal()

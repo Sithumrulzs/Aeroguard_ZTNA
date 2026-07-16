@@ -38,7 +38,7 @@ class EnclaveService {
 
   static Future<void> initializeDevice(String username) async {
     final String? existingKey = await _vault.read(key: _privateKeyName);
-    final String? backendId   = await _vault.read(key: _backendDeviceIdKey);
+    final String? backendId = await _vault.read(key: _backendDeviceIdKey);
     // "pending" is a legacy sentinel — never treat it as a real device ID.
     final bool hasBackendId =
         backendId != null && backendId.isNotEmpty && backendId != 'pending';
@@ -52,8 +52,8 @@ class EnclaveService {
       final deviceId = hasBackendId ? backendId : username;
 
       await _vault.write(key: _privateKeyName, value: keys[0]);
-      await _vault.write(key: _publicKeyName,  value: keys[1]);
-      await _vault.write(key: _deviceIdName,   value: deviceId);
+      await _vault.write(key: _publicKeyName, value: keys[1]);
+      await _vault.write(key: _deviceIdName, value: deviceId);
 
       debugPrint('[+] Device Provisioned. Private Key locked in vault.');
       debugPrint('[!] PUBLIC KEY FOR DATABASE: ${keys[1]}');
@@ -69,10 +69,13 @@ class EnclaveService {
       } else {
         // No valid backend ID — replace any stale placeholder with username.
         final storedId = await _vault.read(key: _deviceIdName);
-        final isStale  = storedId == null || storedId.isEmpty || storedId == 'pending';
+        final isStale =
+            storedId == null || storedId.isEmpty || storedId == 'pending';
         if (isStale) {
           await _vault.write(key: _deviceIdName, value: username);
-          debugPrint('[~] Stale device ID "$storedId" replaced with: $username');
+          debugPrint(
+            '[~] Stale device ID "$storedId" replaced with: $username',
+          );
         }
       }
       debugPrint('[+] Secure Enclave verified. Hardware identity intact.');
@@ -121,15 +124,16 @@ class EnclaveService {
   ) async {
     // Prefer the server-assigned device_id; never use "pending" sentinel.
     final backendId = await _vault.read(key: _backendDeviceIdKey);
-    final localId   = await _vault.read(key: _deviceIdName);
-    final deviceId  = (backendId != null && backendId.isNotEmpty && backendId != 'pending')
+    final localId = await _vault.read(key: _deviceIdName);
+    final deviceId =
+        (backendId != null && backendId.isNotEmpty && backendId != 'pending')
         ? backendId
         : localId;
 
     if (deviceId == null) return null;
 
-    final timestamp    = DateTime.now().toUtc().toIso8601String();
-    final rawData      = '$deviceId:$username:$timestamp';
+    final timestamp = DateTime.now().toUtc().toIso8601String();
+    final rawData = '$deviceId:$username:$timestamp';
     final signatureHex = await signPayload(rawData);
     if (signatureHex == null) return null;
 
@@ -137,7 +141,7 @@ class EnclaveService {
 
     return {
       'device_id': deviceId,
-      'username':  username,
+      'username': username,
       'timestamp': timestamp,
       'signature': signatureHex,
     };

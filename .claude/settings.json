@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(rm -f smoke_test_temp.py)",
+      "Bash(tasklist)"
+    ]
+  }
+}

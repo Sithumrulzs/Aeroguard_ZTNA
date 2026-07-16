@@ -14,8 +14,15 @@ class AuthService {
   static const String _vendorNameKey    = 'aeroguard_vendor_name';
   static const String _vendorCompanyKey = 'aeroguard_vendor_company';
   static const String _vendorExpiresKey = 'aeroguard_vendor_expires';
+  static const String _bioDeclinedKey   = 'aeroguard_bio_declined';
 
   static final _vault = const FlutterSecureStorage();
+
+  // In-memory only for the lifetime of the current app process — never
+  // persisted, never logged. Lets AdminDashboard offer biometric enrollment
+  // after a manual password login without asking the user to retype it.
+  // Cleared on logout.
+  static String? _sessionPassword;
 
   /// Authenticate against the central auth server hosted on Choreo.
   static Future<AuthResponse> login(String username, String password) async {
@@ -38,8 +45,6 @@ class AuthService {
           );
 
       debugPrint('[*] Login response status: ${response.statusCode}');
-
-      debugPrint('[*] Login response body: ${response.body}');
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
@@ -135,12 +140,41 @@ class AuthService {
     return creds != null;
   }
 
-  /// Remove saved biometric credentials (call on logout or manual revoke).
+  /// Remove saved biometric credentials (call on logout, self-heal when the
+  /// sensor disappears, or a backend-rejected stored password). Also clears
+  /// the declined flag, so a device that no longer has an enrollment offers
+  /// it again next time rather than staying permanently opted out.
   static Future<void> clearBiometricCredentials() async {
     await _vault.delete(key: _bioUsernameKey);
     await _vault.delete(key: _bioPasswordKey);
+    await _vault.delete(key: _bioDeclinedKey);
     debugPrint('[+] Biometric credentials cleared');
   }
+
+  /// Marks that the user explicitly chose NOT NOW on the biometric-enable
+  /// dialog, so it stops asking on every login. Routing/UI hint only — see
+  /// [hasDeclinedBiometric].
+  static Future<void> setBiometricDeclined() async {
+    await _vault.write(key: _bioDeclinedKey, value: 'true');
+  }
+
+  /// True once the user has declined the biometric-enable offer on this
+  /// device. A routing/UI hint only — never treat this as an auth check.
+  static Future<bool> hasDeclinedBiometric() async {
+    return await _vault.read(key: _bioDeclinedKey) == 'true';
+  }
+
+  /// Caches the just-verified password in memory only, for the lifetime of
+  /// this app process — lets AdminDashboard offer biometric enrollment
+  /// later in the same session without asking the user to retype it.
+  static void cacheSessionPassword(String password) {
+    _sessionPassword = password;
+  }
+
+  /// Returns the in-memory session password cached by [cacheSessionPassword],
+  /// or null if this process hasn't seen a manual login yet (or it was
+  /// cleared by [logout]).
+  static String? getSessionPassword() => _sessionPassword;
 
   // ── Session ──────────────────────────────────────────────────────────────
 
@@ -160,11 +194,14 @@ class AuthService {
     return username != null && username.isNotEmpty;
   }
 
-  /// Logout — clears session and biometric credentials.
+  /// Logout — clears session, biometric credentials/declined flag, and the
+  /// in-memory session password, so the next admin on this device gets a
+  /// clean slate.
   static Future<void> logout() async {
     await _vault.delete(key: _usernameKey);
     await _vault.delete(key: _deviceIdKey);
     await clearBiometricCredentials();
+    _sessionPassword = null;
     debugPrint('[+] User logged out');
   }
 

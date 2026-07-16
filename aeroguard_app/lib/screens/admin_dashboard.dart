@@ -1,18 +1,22 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_constants.dart';
 import '../config/transitions.dart';
 import '../services/auth_service.dart';
+import '../services/biometric_service.dart';
 import '../services/enclave_service.dart';
 import '../services/notification_service.dart';
 import '../widgets/live_telemetry_panel.dart';
 import '../services/network_service.dart';
 import 'sign_in_page.dart';
 import 'device_identity_screen.dart';
+import 'knock_history_screen.dart';
 import 'provision_token_screen.dart';
 
 class AdminDashboard extends StatefulWidget {
@@ -63,8 +67,13 @@ class _AdminDashboardState extends State<AdminDashboard>
         child: IndexedStack(
           index: _index,
           children: [
-            _OverviewTab(key: _overviewKey, onLogout: _logout),
+            _OverviewTab(
+              key: _overviewKey,
+              onLogout: _logout,
+              onViewHistory: () => _switchTab(2),
+            ),
             const _AccessTab(),
+            const KnockHistoryTab(),
             _VaultTab(onVendorRevoked: () => _overviewKey.currentState?._fetchStats()),
           ],
         ),
@@ -125,9 +134,16 @@ class _BottomNav extends StatelessWidget {
                 onTap: onTap,
               ),
               _NavItem(
+                icon: Icons.history_rounded,
+                label: 'HISTORY',
+                index: 2,
+                current: currentIndex,
+                onTap: onTap,
+              ),
+              _NavItem(
                 icon: Icons.fingerprint,
                 label: 'VAULT',
-                index: 2,
+                index: 3,
                 current: currentIndex,
                 onTap: onTap,
               ),
@@ -205,13 +221,19 @@ class _NavItem extends StatelessWidget {
 // ─────────────────────────────────────────────────────────────────────────────
 class _OverviewTab extends StatefulWidget {
   final VoidCallback onLogout;
-  const _OverviewTab({super.key, required this.onLogout});
+  final VoidCallback onViewHistory;
+  const _OverviewTab({
+    super.key,
+    required this.onLogout,
+    required this.onViewHistory,
+  });
 
   @override
   State<_OverviewTab> createState() => _OverviewTabState();
 }
 
-class _OverviewTabState extends State<_OverviewTab> {
+class _OverviewTabState extends State<_OverviewTab>
+    with SingleTickerProviderStateMixin {
   Timer? _timer;
   String _username       = 'ADMIN';
   bool   _loadingStats   = true;
@@ -223,6 +245,17 @@ class _OverviewTabState extends State<_OverviewTab> {
   List<String> _registeredAdminNames = [];
   List<String> _vendorNames          = [];
 
+  late AnimationController _heroCtrl;
+  late Animation<double> _heroFade;
+  late Animation<Offset> _heroSlide;
+
+  String get _greeting {
+    final h = DateTime.now().hour;
+    if (h < 12) return 'Good morning';
+    if (h < 17) return 'Good afternoon';
+    return 'Good evening';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -230,11 +263,22 @@ class _OverviewTabState extends State<_OverviewTab> {
     _fetchStats();
     // Refresh stats every 30 seconds
     _timer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchStats());
+
+    _heroCtrl = AnimationController(
+      duration: const Duration(milliseconds: 1000),
+      vsync: this,
+    )..forward();
+    _heroFade = CurvedAnimation(parent: _heroCtrl, curve: Curves.easeOut);
+    _heroSlide = Tween<Offset>(
+      begin: const Offset(0, 0.08),
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _heroCtrl, curve: Curves.easeOutCubic));
   }
 
   @override
   void dispose() {
     _timer?.cancel();
+    _heroCtrl.dispose();
     super.dispose();
   }
 
@@ -283,7 +327,8 @@ class _OverviewTabState extends State<_OverviewTab> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // App bar
+            // App bar — small kicker on top, a warmer personal greeting
+            // carries the visual weight instead of a flat static title.
             Padding(
               padding: const EdgeInsets.fromLTRB(24, 16, 12, 0),
               child: Row(
@@ -291,22 +336,29 @@ class _OverviewTabState extends State<_OverviewTab> {
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text(
-                        'COMMAND CENTER',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 17,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 1.5,
-                        ),
+                      Row(
+                        children: [
+                          const Text(
+                            'COMMAND CENTER',
+                            style: TextStyle(
+                              color: Color(0xFF475569),
+                              fontSize: 10,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 2.0,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          _PulsingDot(color: const Color(0xFF10B981)),
+                        ],
                       ),
-                      const SizedBox(height: 2),
+                      const SizedBox(height: 4),
                       Text(
-                        'ADMIN  ·  $_username',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.3),
-                          fontSize: 10,
-                          letterSpacing: 1.5,
+                        '$_greeting, $_username',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                          letterSpacing: 0.2,
                         ),
                       ),
                     ],
@@ -324,13 +376,54 @@ class _OverviewTabState extends State<_OverviewTab> {
               ),
             ),
 
-            const SizedBox(height: 20),
+            const SizedBox(height: 18),
 
             Expanded(
               child: SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(horizontal: 24),
                 child: Column(
                   children: [
+                    FadeTransition(
+                      opacity: _heroFade,
+                      child: SlideTransition(
+                        position: _heroSlide,
+                        child: Column(
+                          children: [
+                            _HeroKnocksCard(
+                              value: _totalKnocks,
+                              isLoading: _loadingStats,
+                              onTap: widget.onViewHistory,
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _QuickActionButton(
+                                    icon: Icons.qr_code,
+                                    label: 'Provision Vendor',
+                                    color: Colors.orangeAccent,
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      slideUpRoute(const ProvisionTokenScreen()),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: _QuickActionButton(
+                                    icon: Icons.history_rounded,
+                                    label: 'Knock History',
+                                    color: const Color(0xFF00C3FF),
+                                    onTap: widget.onViewHistory,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                          ],
+                        ),
+                      ),
+                    ),
                     _GatewayStatusCard(),
                     const SizedBox(height: 14),
                     const _PendingDevicePanel(),
@@ -339,13 +432,13 @@ class _OverviewTabState extends State<_OverviewTab> {
                     GridView.count(
                       shrinkWrap: true,
                       physics: const NeverScrollableScrollPhysics(),
-                      crossAxisCount: 2,
-                      mainAxisSpacing: 12,
-                      crossAxisSpacing: 12,
-                      childAspectRatio: 1.25,
+                      crossAxisCount: 3,
+                      mainAxisSpacing: 10,
+                      crossAxisSpacing: 10,
+                      childAspectRatio: 0.86,
                       children: [
                         _MetricCard(
-                          label: 'ACTIVE ADMINS',
+                          label: 'ADMINS',
                           value: _registeredAdmins,
                           icon: Icons.person_outline_rounded,
                           names: _registeredAdminNames,
@@ -353,19 +446,12 @@ class _OverviewTabState extends State<_OverviewTab> {
                           accentColor: const Color(0xFF00C3FF),
                         ),
                         _MetricCard(
-                          label: 'ACTIVE VENDORS',
+                          label: 'VENDORS',
                           value: _activeVendors,
                           icon: Icons.people_outline_rounded,
                           names: _vendorNames,
                           isLoading: _loadingStats,
                           accentColor: Colors.orangeAccent,
-                        ),
-                        _MetricCard(
-                          label: 'KNOCKS TODAY',
-                          value: _totalKnocks,
-                          icon: Icons.data_usage_outlined,
-                          isLoading: _loadingStats,
-                          accentColor: const Color(0xFF818CF8),
                         ),
                         _MetricCard(
                           label: 'GATEWAY',
@@ -383,6 +469,173 @@ class _OverviewTabState extends State<_OverviewTab> {
                     const SizedBox(height: 24),
                   ],
                 ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HERO KNOCKS CARD — promotes the day's most dynamic number out of the
+// uniform metric grid, with a count-up reveal and a direct link into the
+// new History tab.
+// ─────────────────────────────────────────────────────────────────────────────
+class _HeroKnocksCard extends StatelessWidget {
+  final String value;
+  final bool isLoading;
+  final VoidCallback onTap;
+
+  const _HeroKnocksCard({
+    required this.value,
+    required this.isLoading,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(20),
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: [Color(0xFF0D1B2E), Color(0xFF080F1C)],
+          ),
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: const Color(0xFF00C3FF).withValues(alpha: 0.22)),
+          boxShadow: [
+            BoxShadow(
+              color: const Color(0xFF00C3FF).withValues(alpha: 0.08),
+              blurRadius: 28,
+              spreadRadius: -4,
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: const Color(0xFF00C3FF).withValues(alpha: 0.12),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: const Icon(Icons.bolt_rounded, color: Color(0xFF00C3FF), size: 24),
+            ),
+            const SizedBox(width: 16),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'KNOCKS TODAY',
+                    style: TextStyle(
+                      color: Color(0xFF64748B),
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  isLoading
+                      ? const SizedBox(
+                          height: 30,
+                          width: 30,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF00C3FF)),
+                          ),
+                        )
+                      : _CountUpNumber(value: int.tryParse(value) ?? 0),
+                ],
+              ),
+            ),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'VIEW HISTORY',
+                  style: TextStyle(
+                    color: const Color(0xFF00C3FF).withValues(alpha: 0.8),
+                    fontSize: 9,
+                    fontWeight: FontWeight.w700,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                const Icon(Icons.chevron_right, color: Color(0xFF00C3FF), size: 16),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _CountUpNumber extends StatelessWidget {
+  final int value;
+  const _CountUpNumber({required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    return TweenAnimationBuilder<double>(
+      tween: Tween<double>(begin: 0, end: value.toDouble()),
+      duration: const Duration(milliseconds: 700),
+      curve: Curves.easeOutCubic,
+      builder: (context, v, child) => Text(
+        v.round().toString(),
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 30,
+          fontWeight: FontWeight.w800,
+          height: 1.0,
+        ),
+      ),
+    );
+  }
+}
+
+class _QuickActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _QuickActionButton({
+    required this.icon,
+    required this.label,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        decoration: BoxDecoration(
+          color: color.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(color: color.withValues(alpha: 0.22)),
+        ),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 18),
+            const SizedBox(height: 6),
+            Text(
+              label.toUpperCase(),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: color,
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.8,
               ),
             ),
           ],
@@ -788,6 +1041,7 @@ class _AccessTabState extends State<_AccessTab>
   String _tunnelLabel = 'Standby — Awaiting knock';
   String _username    = '';
   Timer? _gatewayPollTimer;
+  final AudioPlayer _knockPlayer = AudioPlayer();
 
   late AnimationController _headerCtrl;
   late Animation<double> _headerFade;
@@ -874,12 +1128,15 @@ class _AccessTabState extends State<_AccessTab>
   void dispose() {
     _headerCtrl.dispose();
     _gatewayPollTimer?.cancel();
+    _knockPlayer.dispose();
     super.dispose();
   }
 
   Future<void> _handleKnock() async {
-    // Second tap while connected → terminate session on gateway
+    // Second tap while connected → terminate session on gateway. Lighter
+    // than the initiating tap below — closing is a lower-stakes action.
     if (_knockStatus == _KnockStatus.success) {
+      HapticFeedback.lightImpact();
       _gatewayPollTimer?.cancel();
       setState(() {
         _knockStatus = _KnockStatus.idle;
@@ -894,6 +1151,8 @@ class _AccessTabState extends State<_AccessTab>
       return;
     }
 
+    HapticFeedback.mediumImpact();
+    unawaited(_knockPlayer.play(AssetSource('audio/knock_activate.mp3')));
     setState(() {
       _knockStatus = _KnockStatus.knocking;
       _tunnelLabel = 'Establishing secure tunnel...';
@@ -906,12 +1165,21 @@ class _AccessTabState extends State<_AccessTab>
     if (!mounted) return;
 
     if (success) {
+      // A single confident pulse for a clean "granted" feel.
+      HapticFeedback.heavyImpact();
       setState(() {
         _knockStatus = _KnockStatus.success;
         _tunnelLabel = 'Tunnel active — Connection secured';
       });
       _startGatewayPolling();
     } else {
+      // A double pulse reads distinctly as "denied" against success's
+      // single one.
+      HapticFeedback.heavyImpact();
+      Future.delayed(
+        const Duration(milliseconds: 120),
+        HapticFeedback.heavyImpact,
+      );
       setState(() {
         _knockStatus = _KnockStatus.failed;
         _tunnelLabel = 'Connection refused — Check gateway';
@@ -1166,6 +1434,14 @@ class _KnockButtonState extends State<_KnockButton>
       _ => const Color(0xFF00C3FF),
     };
 
+    // Grows once pressed (any non-idle status) so the center circle has
+    // room for its busiest content — the spinner added during knocking —
+    // without crowding the logo/label. Ring 1 grows with it so the now-
+    // larger center button doesn't crowd past its innermost ring.
+    final bool isActive = widget.status != _KnockStatus.idle;
+    final double centerSize = isActive ? 128 : 112;
+    final double ring1Boost = isActive ? 16 : 0;
+
     return GestureDetector(
       onTap: widget.onTap,
       child: AnimatedBuilder(
@@ -1200,10 +1476,13 @@ class _KnockButtonState extends State<_KnockButton>
                   ),
                 ),
               ),
-              // Ring 1 — closest, with glow
+              // Ring 1 — closest, with glow. Plain Container, not animated:
+              // it must track _pulse.value in real time every frame like
+              // rings 2/3 above; the boost below just snaps with it on
+              // status change, same as its color already does.
               Container(
-                height: 124 + _pulse.value * 4,
-                width: 124 + _pulse.value * 4,
+                height: 124 + _pulse.value * 4 + ring1Boost,
+                width: 124 + _pulse.value * 4 + ring1Boost,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
@@ -1224,8 +1503,9 @@ class _KnockButtonState extends State<_KnockButton>
               // Center button
               AnimatedContainer(
                 duration: const Duration(milliseconds: 400),
-                height: 112,
-                width: 112,
+                curve: Curves.easeOutBack,
+                height: centerSize,
+                width: centerSize,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: RadialGradient(
@@ -1317,13 +1597,70 @@ class _VaultTabState extends State<_VaultTab> {
   String  _deviceId    = '—';
   String? _lastKnockAt;
   List<Map<String, dynamic>> _sessions = [];
+  bool    _biometricEnrollable = false;
 
   @override
   void initState() {
     super.initState();
     _loadDeviceId();
     _fetchVaultData();
+    _checkBiometricEnrollable();
     _timer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchVaultData());
+  }
+
+  /// True only when the sensor can actually complete a prompt AND nothing
+  /// is enrolled yet — the tile this drives is the "way back in" for an
+  /// admin who declined the enable-dialog after their last manual login.
+  Future<void> _checkBiometricEnrollable() async {
+    final available = await BiometricService.isAvailable();
+    final enrolled  = await AuthService.hasBiometricCredentials();
+    if (mounted) {
+      setState(() => _biometricEnrollable = available && !enrolled);
+    }
+  }
+
+  /// Confirms with a biometric prompt, then saves enrollment using the
+  /// in-memory password cached by SignInPage's last manual login — never
+  /// asks the user to retype it, and never persists that password anywhere
+  /// except inside the biometric credential store itself.
+  Future<void> _enableBiometric() async {
+    final result = await BiometricService.authenticate(
+      reason: 'AeroGuard ZTNA: Confirm your identity to enable biometric sign-in.',
+    );
+    if (!mounted) return;
+
+    if (result != BiometricAuthResult.success) {
+      _showSnack(BiometricService.describeResult(result), const Color(0xFF334155));
+      return;
+    }
+
+    final username = await AuthService.getUsername();
+    final password = AuthService.getSessionPassword();
+    if (!mounted) return;
+
+    if (username == null || password == null) {
+      _showSnack(
+        'Sign out and back in with your password to enable this.',
+        const Color(0xFF334155),
+      );
+      return;
+    }
+
+    await AuthService.saveBiometricCredentials(username, password);
+    if (!mounted) return;
+    setState(() => _biometricEnrollable = false);
+    _showSnack('Biometric sign-in enabled.', const Color(0xFF10B981));
+  }
+
+  void _showSnack(String message, Color color) {
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(message,
+          style: const TextStyle(color: Colors.white, fontSize: 13)),
+      backgroundColor: color,
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      margin: const EdgeInsets.all(16),
+    ));
   }
 
   @override
@@ -1600,6 +1937,16 @@ class _VaultTabState extends State<_VaultTab> {
                   const Text('SECURITY ACTIONS',
                       style: TextStyle(color: Color(0xFF475569), fontSize: 10, letterSpacing: 1.5, fontWeight: FontWeight.w600)),
                   const SizedBox(height: 16),
+                  if (_biometricEnrollable) ...[
+                    _VaultAction(
+                      icon: Icons.fingerprint,
+                      label: 'Enable Biometric Sign-In',
+                      subtitle: 'Unlock with fingerprint next time',
+                      color: const Color(0xFF10B981),
+                      onTap: _enableBiometric,
+                    ),
+                    Divider(color: Colors.white.withValues(alpha: 0.05), height: 20),
+                  ],
                   _VaultAction(
                     icon: Icons.qr_code,
                     label: 'Provision Vendor Token',

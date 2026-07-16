@@ -978,6 +978,28 @@ async def vendor_device_status(token: str):
     }
 
 
+@app.get("/api/v1/device/is-admin-laptop")
+async def is_admin_laptop(mac: str):
+    """
+    Called by the generic terminal exe on launch — lets it tell whether
+    it's running on a pre-registered admin workstation (MAC-bound, no
+    pairing needed at all) versus an unrecognized device that should
+    fall back to vendor-style QR pairing. Admin laptops never show a QR.
+    """
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM public.users WHERE LOWER(laptop_mac) = LOWER(%s) LIMIT 1",
+                    (mac,)
+                )
+                row = cur.fetchone()
+        return {"is_admin": row is not None}
+    except Exception as e:
+        print(f"[-] is-admin-laptop check failed: {e}")
+        return {"is_admin": False}
+
+
 @app.post("/api/v1/device/register-pairing")
 async def register_pairing(payload: RegisterPairingPayload):
     """

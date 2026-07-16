@@ -60,11 +60,11 @@ class NotificationService {
     _initialized = true;
   }
 
-  /// Fires the moment a vendor knocks, before any device is ever allowed to
-  /// connect. The gateway no longer auto-guesses which device is theirs —
-  /// the vendor proves it themselves by scanning their laptop's QR — so
-  /// there is nothing to Approve until that's done; only Decline is offered
-  /// as a one-tap action here. The body tap opens the full card.
+  /// Fires the moment a vendor knocks. Always shows the vendor's details
+  /// and device IP/MAC (pending placeholder until the laptop is paired),
+  /// with both Approve and Decline beneath — approving before a device is
+  /// actually paired is harmlessly rejected server-side, so there's no
+  /// need to hide the button while waiting.
   static Future<void> showVendorDeviceAlert({
     required String vendorName,
     required String company,
@@ -74,31 +74,28 @@ class NotificationService {
     required String adminUsername,
   }) async {
     await init();
-    final bool deviceKnown = deviceIp.isNotEmpty;
-    final AndroidNotificationDetails androidDetails =
+    const AndroidNotificationDetails androidDetails =
         AndroidNotificationDetails(
       'aeroguard_alerts',
       'AeroGuard Security Alerts',
       channelDescription: 'Vendor device approval requests',
       importance: Importance.high,
       priority: Priority.high,
-      color: const Color(0xFF00C3FF),
+      color: Color(0xFF00C3FF),
       enableVibration: true,
       playSound: true,
       actions: [
-        if (deviceKnown)
-          const AndroidNotificationAction('approve', 'Approve',
-              showsUserInterface: false, cancelNotification: true),
-        const AndroidNotificationAction('decline', 'Decline',
+        AndroidNotificationAction('approve', 'Approve',
+            showsUserInterface: false, cancelNotification: true),
+        AndroidNotificationAction('decline', 'Decline',
             showsUserInterface: false, cancelNotification: true),
       ],
     );
-    final NotificationDetails details =
+    const NotificationDetails details =
         NotificationDetails(android: androidDetails);
-    final body = deviceKnown
-        ? '$vendorName ($company)\nIP: $deviceIp   MAC: $deviceMac'
-        : '$vendorName ($company) has knocked\n'
-            'Open the app once their laptop has been paired via QR.';
+    final body = '$vendorName ($company)\n'
+        'IP: ${deviceIp.isNotEmpty ? deviceIp : "Pending..."}   '
+        'MAC: ${deviceMac.isNotEmpty ? deviceMac : "Pending..."}';
     await _plugin.show(
       vendorName.hashCode,
       'Device Access Request',

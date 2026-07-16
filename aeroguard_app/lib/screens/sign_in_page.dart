@@ -139,6 +139,10 @@ class _SignInPageState extends State<SignInPage>
         final loggedInUsername = response.username ?? trimmedUsername;
         final enteredPassword  = _passCtrl.text;
 
+        // In-memory only, for this session — lets AdminDashboard offer
+        // biometric enrollment later without asking for the password again.
+        AuthService.cacheSessionPassword(enteredPassword);
+
         // Generate / verify device keys in the secure vault.
         await EnclaveService.initializeDevice(loggedInUsername);
 
@@ -170,12 +174,14 @@ class _SignInPageState extends State<SignInPage>
         // Fire-and-forget — does not block navigation.
         LocationService.sendToBackend(loggedInUsername);
 
-        // Offer biometric save on first login if hardware is available
-        // and credentials haven't been saved before.
+        // Offer biometric save on first login if hardware is available,
+        // credentials haven't been saved before, and the user hasn't
+        // already declined this offer on this device.
         if (mounted) {
           final bioAvailable = await BiometricService.isAvailable();
           final alreadySaved = await AuthService.hasBiometricCredentials();
-          if (bioAvailable && !alreadySaved && mounted) {
+          final declined     = await AuthService.hasDeclinedBiometric();
+          if (bioAvailable && !alreadySaved && !declined && mounted) {
             await _promptBiometricSave(loggedInUsername, enteredPassword);
           }
         }
@@ -244,6 +250,10 @@ class _SignInPageState extends State<SignInPage>
 
     if (save == true) {
       await AuthService.saveBiometricCredentials(username, password);
+    } else {
+      // NOT NOW — record the decline so this dialog stops nagging on every
+      // future login (AdminDashboard still offers a way back in).
+      await AuthService.setBiometricDeclined();
     }
   }
 

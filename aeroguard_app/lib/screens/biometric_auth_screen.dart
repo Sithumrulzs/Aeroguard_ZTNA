@@ -25,6 +25,9 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
   _AuthStatus _status       = _AuthStatus.idle;
   bool        _hasSavedCreds = false;
   String      _savedUsername = '';
+  // Overrides the generic _AuthStatus.failed label with a specific reason
+  // (e.g. locked out, unrecognised) from BiometricService.describeResult().
+  String?     _statusDetail;
 
   @override
   void initState() {
@@ -80,16 +83,36 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
   // ── Biometric prompt ──────────────────────────────────────────────────────
   Future<void> _triggerBiometric() async {
     if (!mounted) return;
-    setState(() => _status = _AuthStatus.scanning);
+    setState(() {
+      _status = _AuthStatus.scanning;
+      _statusDetail = null;
+    });
 
-    final success = await BiometricService.authenticateAdmin();
+    final result = await BiometricService.authenticate(
+      reason: 'AeroGuard ZTNA: Verify your identity to access the datacenter gateway.',
+    );
     if (!mounted) return;
 
-    if (success) {
+    if (result == BiometricAuthResult.success) {
       await _autoLogin();
-    } else {
-      setState(() => _status = _AuthStatus.failed);
+      return;
     }
+
+    if (result == BiometricAuthResult.notEnrolled ||
+        result == BiometricAuthResult.notAvailable) {
+      // This device/state can never satisfy a biometric prompt — don't
+      // strand the user on a screen that cannot work.
+      await AuthService.clearBiometricCredentials();
+      _goToManualLogin();
+      return;
+    }
+
+    // Covers failure, error, lockedOut, and permanentlyLockedOut — stay on
+    // screen with the specific reason; the password route is always there.
+    setState(() {
+      _status = _AuthStatus.failed;
+      _statusDetail = BiometricService.describeResult(result);
+    });
   }
 
   // ── Auto-login with stored credentials ───────────────────────────────────
@@ -117,8 +140,13 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
         Navigator.pushReplacement(context, premiumRoute(const AdminDashboard()));
       }
     } else {
-      // Stored creds rejected by server — clear them and force manual login
+      // Stored creds rejected by server (e.g. password changed elsewhere) —
+      // clear them and explain before falling back to manual login.
       await AuthService.clearBiometricCredentials();
+      if (!mounted) return;
+      await _showMessageDialog(
+        'Your saved sign-in is no longer valid. Please sign in with your password.',
+      );
       if (mounted) _goToManualLogin();
     }
   }
@@ -126,6 +154,23 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
   void _goToManualLogin() {
     if (!mounted || _status == _AuthStatus.success) return;
     Navigator.pushReplacement(context, slideLeftRoute(const SignInPage()));
+  }
+
+  Future<void> _showMessageDialog(String message) {
+    return showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF0D1421),
+        title: const Text('Sign-In Required', style: TextStyle(color: Colors.white)),
+        content: Text(message, style: const TextStyle(color: Color(0xFFC0C7D4))),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('OK', style: TextStyle(color: Color(0xFF00C3FF))),
+          ),
+        ],
+      ),
+    );
   }
 
   // ── Helpers ───────────────────────────────────────────────────────────────
@@ -144,7 +189,7 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
         _AuthStatus.scanning    => 'Scanning biometric...',
         _AuthStatus.loggingIn   => 'Authenticating...',
         _AuthStatus.success     => 'Access granted',
-        _AuthStatus.failed      => 'Biometric failed — tap to retry',
+        _AuthStatus.failed      => _statusDetail ?? 'Biometric failed — tap to retry',
         _AuthStatus.unavailable => 'Biometric unavailable',
       };
 

@@ -1,15 +1,32 @@
 import 'dart:async';
 import 'dart:math';
+import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import '../services/biometric_service.dart';
 import '../services/enclave_service.dart';
 import '../services/auth_service.dart';
 import '../config/transitions.dart';
 import 'biometric_auth_screen.dart';
+import 'intro_video_screen.dart';
+import 'sign_in_page.dart';
 import 'vendor_dashboard.dart';
 
+// Boot-screen background — also referenced by IntroVideoScreen so its
+// color-match handoff overlay is pixel-identical, never a second
+// hardcoded hex.
+const Color kHomeLoadBackgroundColor = Color(0xFF050810);
+
 class HomeLoadPage extends StatefulWidget {
-  const HomeLoadPage({super.key});
+  const HomeLoadPage({super.key, this.fromVideo = false});
+
+  /// True only when reached from IntroVideoScreen's color-matched handoff.
+  /// The badge/wordmark entrance itself is unchanged either way; this just
+  /// removes the extra 500ms stagger before the status/progress block, so
+  /// everything fades in together as the video's own background fade is
+  /// still settling instead of a beat later. Direct launches (and the
+  /// reduce-motion path) leave this false and keep that original stagger.
+  final bool fromVideo;
 
   @override
   State<HomeLoadPage> createState() => _HomeLoadPageState();
@@ -24,6 +41,7 @@ class _HomeLoadPageState extends State<HomeLoadPage>
   late Animation<double> _logoScale;
   late Animation<double> _contentOpacity;
   late Animation<Offset> _contentSlide;
+  final AudioPlayer _transitionPlayer = AudioPlayer();
 
   String _status = 'INITIALIZING SECURE ENCLAVE';
   double _progress = 0.0;
@@ -43,7 +61,7 @@ class _HomeLoadPageState extends State<HomeLoadPage>
     _scanCtrl = AnimationController(
       duration: const Duration(seconds: 4),
       vsync: this,
-    )..repeat();
+    );
 
     _logoOpacity = CurvedAnimation(
       parent: _logoCtrl,
@@ -64,10 +82,32 @@ class _HomeLoadPageState extends State<HomeLoadPage>
           CurvedAnimation(parent: _contentCtrl, curve: Curves.easeOutCubic),
         );
 
+    // Badge/wordmark entrance is always the original pop+fade — unchanged.
+    _scanCtrl.repeat();
     _logoCtrl.forward();
-    Future.delayed(const Duration(milliseconds: 500), () {
-      if (mounted) _contentCtrl.forward();
-    });
+
+    // The transition accent lives here, not baked into the video — it
+    // plays right as this screen mounts, which is the exact moment
+    // IntroVideoScreen's zero-duration route replacement lands (i.e. at
+    // the end of the video, not before it).
+    if (widget.fromVideo) {
+      unawaited(
+        _transitionPlayer.play(AssetSource('audio/transition_whoosh.mp3')),
+      );
+    }
+
+    // The status/progress block still fades in after the badge, except
+    // when arriving from the video: there it starts at the same time as
+    // everything else instead of a beat later, so it fades in alongside
+    // the tail of the video's own background transition rather than after
+    // it's already settled.
+    if (widget.fromVideo) {
+      _contentCtrl.forward();
+    } else {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) _contentCtrl.forward();
+      });
+    }
 
     _bootSequence();
   }
@@ -77,10 +117,16 @@ class _HomeLoadPageState extends State<HomeLoadPage>
     _logoCtrl.dispose();
     _contentCtrl.dispose();
     _scanCtrl.dispose();
+    _transitionPlayer.dispose();
     super.dispose();
   }
 
   Future<void> _bootSequence() async {
+    // Kicked off immediately — not after the boot delays below — so this
+    // resolves for free while Phase 1-4 run their course and the final
+    // routing decision costs no extra wall-clock time.
+    final authDestinationFuture = _resolveAuthDestination();
+
     // A returning vendor with a still-valid session skips the admin
     // biometric/sign-in path entirely and goes straight back to their
     // dashboard — closing the app shouldn't force them to re-scan the QR
@@ -112,9 +158,13 @@ class _HomeLoadPageState extends State<HomeLoadPage>
     // Get authenticated username
     final username = await AuthService.getUsername() ?? 'admin';
 
-    // Phase 1 — initialise enclave
+    // Phase 1 — initialise enclave (IntroVideoScreen already kicked this off
+    // so the video's runtime doubles as loading time; reuse that future
+    // instead of running the isolate-heavy init a second time, falling back
+    // to starting it here if that screen was skipped).
     await Future.delayed(const Duration(milliseconds: 1800));
-    await EnclaveService.initializeDevice(username);
+    await (IntroVideoScreen.enclaveInitFuture ??=
+        EnclaveService.initializeDevice(username));
 
     // Phase 2 — hardware key validation
     if (mounted) {
@@ -143,63 +193,145 @@ class _HomeLoadPageState extends State<HomeLoadPage>
     }
     await Future.delayed(const Duration(milliseconds: 900));
 
+    final destination = await authDestinationFuture;
     if (mounted) {
-      Navigator.pushReplacement(
-        context,
-        bootToAuthRoute(const BiometricAuthScreen()),
-      );
+      Navigator.pushReplacement(context, bootToAuthRoute(destination));
     }
+  }
+
+  /// Decides the post-boot screen without adding delay: BiometricAuthScreen
+  /// only when saved credentials exist AND the sensor can actually complete
+  /// a prompt right now — otherwise SignInPage. If credentials exist but
+  /// biometrics are no longer usable (fingerprints removed, sensor
+  /// policy-disabled), the stale credentials are cleared first so the app
+  /// self-heals instead of ever showing a prompt that can only fail.
+  Future<Widget> _resolveAuthDestination() async {
+    final hasCreds = await AuthService.hasBiometricCredentials();
+    if (!hasCreds) return const SignInPage();
+
+    final bioAvailable = await BiometricService.isAvailable();
+    if (!bioAvailable) {
+      await AuthService.clearBiometricCredentials();
+      return const SignInPage();
+    }
+
+    return const BiometricAuthScreen();
+  }
+
+  Widget _buildBadge() => _PremiumLogo(scanAnim: _scanCtrl);
+
+  Widget _buildWordmark() => const Text(
+    'AEROGUARD',
+    style: TextStyle(
+      color: Colors.white,
+      fontSize: 24,
+      fontWeight: FontWeight.bold,
+      letterSpacing: 9.0,
+    ),
+  );
+
+  Widget _buildSubtitle() => const Text(
+    'ZERO TRUST NETWORK ACCESS',
+    style: TextStyle(
+      color: Color(0xFF00C3FF),
+      fontSize: 10,
+      letterSpacing: 3.5,
+      fontWeight: FontWeight.w500,
+    ),
+  );
+
+  Widget _buildStatusBlock() => Column(
+    children: [
+      SizedBox(
+        width: 180,
+        child: TweenAnimationBuilder<double>(
+          tween: Tween<double>(begin: 0, end: _progress),
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeOut,
+          builder: (context, value, child) => LinearProgressIndicator(
+            value: value,
+            backgroundColor: Colors.white.withValues(alpha: 0.05),
+            valueColor: const AlwaysStoppedAnimation<Color>(
+              Color(0xFF00C3FF),
+            ),
+            minHeight: 1.5,
+            borderRadius: BorderRadius.circular(8),
+          ),
+        ),
+      ),
+      const SizedBox(height: 18),
+      AnimatedSwitcher(
+        duration: const Duration(milliseconds: 300),
+        child: Text(
+          _status,
+          key: ValueKey(_status),
+          style: const TextStyle(
+            color: Color(0xFF475569),
+            fontSize: 10,
+            letterSpacing: 2.5,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+      ),
+    ],
+  );
+
+  // Badge pops with a scale+fade, the wordmark below it only fades (no
+  // scale) so it settles in smoothly instead of bouncing in with the
+  // badge. Same for both fromVideo and direct launches — see initState for
+  // the one thing that does differ (when the status block below it starts).
+  Widget _buildLogoBlock() {
+    return AnimatedBuilder(
+      animation: _logoCtrl,
+      builder: (context, child) => Column(
+        children: [
+          Transform.scale(
+            scale: _logoScale.value,
+            child: Opacity(opacity: _logoOpacity.value, child: _buildBadge()),
+          ),
+          const SizedBox(height: 26),
+          Opacity(opacity: _logoOpacity.value, child: _buildWordmark()),
+          const SizedBox(height: 6),
+          Opacity(opacity: _logoOpacity.value, child: _buildSubtitle()),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF050810),
-      body: Container(
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [Color(0xFF050810), Color(0xFF0A1628)],
+      backgroundColor: kHomeLoadBackgroundColor,
+      // The gradient's lower stop is driven by _contentCtrl so the very
+      // first frame (controller value 0, before its delayed .forward())
+      // paints as pure kHomeLoadBackgroundColor — matching the intro
+      // video's final frame exactly — then eases into the two-tone
+      // gradient as content fades in.
+      body: AnimatedBuilder(
+        animation: _contentCtrl,
+        builder: (context, child) => Container(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: [
+                kHomeLoadBackgroundColor,
+                Color.lerp(
+                  kHomeLoadBackgroundColor,
+                  const Color(0xFF0A1628),
+                  _contentCtrl.value,
+                )!,
+              ],
+            ),
           ),
+          child: child,
         ),
         child: Center(
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
               // ── Animated logo ──────────────────────────────────
-              AnimatedBuilder(
-                animation: _logoCtrl,
-                builder: (context, child) => Transform.scale(
-                  scale: _logoScale.value,
-                  child: Opacity(opacity: _logoOpacity.value, child: child),
-                ),
-                child: Column(
-                  children: [
-                    _PremiumLogo(scanAnim: _scanCtrl),
-                    const SizedBox(height: 26),
-                    const Text(
-                      'AEROGUARD',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 9.0,
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'ZERO TRUST NETWORK ACCESS',
-                      style: TextStyle(
-                        color: Color(0xFF00C3FF),
-                        fontSize: 10,
-                        letterSpacing: 3.5,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
+              _buildLogoBlock(),
 
               const SizedBox(height: 72),
 
@@ -208,44 +340,7 @@ class _HomeLoadPageState extends State<HomeLoadPage>
                 opacity: _contentOpacity,
                 child: SlideTransition(
                   position: _contentSlide,
-                  child: Column(
-                    children: [
-                      SizedBox(
-                        width: 180,
-                        child: TweenAnimationBuilder<double>(
-                          tween: Tween<double>(begin: 0, end: _progress),
-                          duration: const Duration(milliseconds: 500),
-                          curve: Curves.easeOut,
-                          builder: (context, value, child) =>
-                              LinearProgressIndicator(
-                                value: value,
-                                backgroundColor: Colors.white.withValues(
-                                  alpha: 0.05,
-                                ),
-                                valueColor: const AlwaysStoppedAnimation<Color>(
-                                  Color(0xFF00C3FF),
-                                ),
-                                minHeight: 1.5,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                        ),
-                      ),
-                      const SizedBox(height: 18),
-                      AnimatedSwitcher(
-                        duration: const Duration(milliseconds: 300),
-                        child: Text(
-                          _status,
-                          key: ValueKey(_status),
-                          style: const TextStyle(
-                            color: Color(0xFF475569),
-                            fontSize: 10,
-                            letterSpacing: 2.5,
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: _buildStatusBlock(),
                 ),
               ),
             ],

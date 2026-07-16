@@ -1,4 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#050810</color>
+    <!-- Matches kHomeLoadBackgroundColor in home_load_page.dart — keeps the
+         native pre-Flutter splash color-identical to the app's boot screen. -->
+    <color name="launch_background">#050810</color>
 </resources>
