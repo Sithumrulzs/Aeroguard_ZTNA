@@ -805,6 +805,61 @@ async def get_vendor_attempts(limit: int = 30):
     return {"attempts": attempts}
 
 
+@app.get("/api/v1/dashboard/knock-history")
+async def get_knock_history(limit: int = 50):
+    """
+    Combined admin + vendor knock history for the dashboard's history view —
+    every ZTNA_KNOCK (admin) and VENDOR_KNOCK/VENDOR_KNOCK_SPA (vendor)
+    event, newest first, with the actor type normalized so the UI can
+    style/filter rows without parsing event_type itself.
+    """
+    event_types = ('ZTNA_KNOCK', 'VENDOR_KNOCK', 'VENDOR_KNOCK_SPA')
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT id, event_type, username, client_ip, status,
+                              details, created_at
+                       FROM public.audit_logs
+                       WHERE event_type = ANY(%s)
+                       ORDER BY created_at DESC, id DESC
+                       LIMIT %s""",
+                    (list(event_types), limit)
+                )
+                rows = cur.fetchall()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Database error: {e}")
+
+    knocks = []
+    granted = 0
+    for r in rows:
+        detail = {}
+        try:
+            detail = json.loads(r["details"]) or {}
+        except Exception:
+            pass
+        is_granted = r["status"] == "GRANTED"
+        if is_granted:
+            granted += 1
+        knocks.append({
+            "id":              r["id"],
+            "actor_type":      "admin" if r["event_type"] == "ZTNA_KNOCK" else "vendor",
+            "event_type":      r["event_type"],
+            "username":        r["username"],
+            "client_ip":       r["client_ip"],
+            "status":          r["status"],
+            "company":         detail.get("company"),
+            "session_seconds": detail.get("session_seconds"),
+            "created_at":      str(r["created_at"]),
+        })
+
+    return {
+        "knocks":        knocks,
+        "granted_count": granted,
+        "denied_count":  len(knocks) - granted,
+    }
+
+
 @app.post("/api/v1/admin/approve-vendor-device")
 async def approve_vendor_device(payload: ApproveVendorDevicePayload, request: Request):
     """Admin approves or denies a vendor's detected device."""
