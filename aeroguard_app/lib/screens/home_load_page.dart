@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:math';
-import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import '../services/biometric_service.dart';
@@ -41,7 +40,6 @@ class _HomeLoadPageState extends State<HomeLoadPage>
   late Animation<double> _logoScale;
   late Animation<double> _contentOpacity;
   late Animation<Offset> _contentSlide;
-  final AudioPlayer _transitionPlayer = AudioPlayer();
 
   String _status = 'INITIALIZING SECURE ENCLAVE';
   double _progress = 0.0;
@@ -86,16 +84,6 @@ class _HomeLoadPageState extends State<HomeLoadPage>
     _scanCtrl.repeat();
     _logoCtrl.forward();
 
-    // The transition accent lives here, not baked into the video — it
-    // plays right as this screen mounts, which is the exact moment
-    // IntroVideoScreen's zero-duration route replacement lands (i.e. at
-    // the end of the video, not before it).
-    if (widget.fromVideo) {
-      unawaited(
-        _transitionPlayer.play(AssetSource('audio/transition_whoosh.mp3')),
-      );
-    }
-
     // The status/progress block still fades in after the badge, except
     // when arriving from the video: there it starts at the same time as
     // everything else instead of a beat later, so it fades in alongside
@@ -117,7 +105,6 @@ class _HomeLoadPageState extends State<HomeLoadPage>
     _logoCtrl.dispose();
     _contentCtrl.dispose();
     _scanCtrl.dispose();
-    _transitionPlayer.dispose();
     super.dispose();
   }
 

@@ -14,8 +14,20 @@ import psycopg2
 import psycopg2.extras
 import subprocess
 import json
+import logging
 import os
 import uvicorn
+
+
+class _HealthCheckLogFilter(logging.Filter):
+    """The dashboard polls /health every ~12-20s from multiple widgets at
+    once, which floods the terminal with nothing but "GET /health 200 OK"
+    and buries anything actually worth seeing (knocks, provisioning,
+    revokes). Drops only that one route from uvicorn's access log —
+    every other endpoint still logs normally."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return "/health" not in record.getMessage()
 
 # ── Environment ───────────────────────────────────────────────────────────────
 load_dotenv()
@@ -419,4 +431,5 @@ if __name__ == "__main__":
     print(f"AeroGuard ZTNA Gateway — 127.0.0.1:{PORT}")
     print("Firewall: spa_sniffer.py  |  Bound: loopback only")
     print("=" * 60 + "\n")
+    logging.getLogger("uvicorn.access").addFilter(_HealthCheckLogFilter())
     uvicorn.run("main:app", host="127.0.0.1", port=PORT, reload=False)

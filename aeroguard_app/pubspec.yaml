@@ -35,6 +35,7 @@ dependencies:
   # AeroGuard Security & Hardware Tools
   flutter_secure_storage: ^10.3.1
   local_auth: ^2.1.7
+  local_auth_android: ^1.0.56
   http: ^1.6.0
   mobile_scanner: ^3.5.5
   ecdsa: ^0.1.2
@@ -82,7 +83,6 @@ flutter:
     - assets/images/
     - assets/video/aeroguard_intro_noword.mp4
     - assets/audio/knock_activate.mp3
-    - assets/audio/transition_whoosh.mp3
 
   # To add other assets to your application, add them here:
   # assets:

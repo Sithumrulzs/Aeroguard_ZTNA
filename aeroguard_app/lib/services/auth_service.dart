@@ -7,6 +7,7 @@ import '../config/api_constants.dart';
 /// Manages authentication with the AeroGuard backend
 class AuthService {
   static const String _usernameKey = 'aeroguard_username';
+  static const String _fullNameKey = 'aeroguard_full_name';
   static const String _deviceIdKey = 'aeroguard_device_id_from_backend';
   static const String _bioUsernameKey = 'aeroguard_bio_username';
   static const String _bioPasswordKey = 'aeroguard_bio_password';
@@ -40,7 +41,11 @@ class AuthService {
             body: jsonEncode({'username': username, 'password': password}),
           )
           .timeout(
-            const Duration(seconds: 6),
+            // Render's free tier spins the backend down after ~15 minutes
+            // idle; the next request pays a cold-start penalty that can
+            // run well past half a minute. 6s was failing outright on
+            // every cold login — long enough to actually survive a boot.
+            const Duration(seconds: 45),
             onTimeout: () => throw Exception('timeout'),
           );
 
@@ -49,10 +54,14 @@ class AuthService {
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
 
-        // Central auth returns: {status, username, role, device_id, token}
+        // Central auth returns: {status, username, full_name, role, device_id, token}
         await _vault.write(
           key: _usernameKey,
           value: data['username'] ?? username,
+        );
+        await _vault.write(
+          key: _fullNameKey,
+          value: data['full_name'] ?? data['username'] ?? username,
         );
         await _vault.write(key: _deviceIdKey, value: data['device_id'] ?? '');
 
@@ -183,6 +192,15 @@ class AuthService {
     return await _vault.read(key: _usernameKey);
   }
 
+  /// Get the admin's full name (e.g. "KSS Jayamanna") for display purposes —
+  /// falls back to the username if none was set server-side, so callers
+  /// never need a separate null-handling path.
+  static Future<String?> getFullName() async {
+    final name = await _vault.read(key: _fullNameKey);
+    if (name != null && name.isNotEmpty) return name;
+    return getUsername();
+  }
+
   /// Get device_id from backend
   static Future<String?> getBackendDeviceId() async {
     return await _vault.read(key: _deviceIdKey);
@@ -199,6 +217,7 @@ class AuthService {
   /// clean slate.
   static Future<void> logout() async {
     await _vault.delete(key: _usernameKey);
+    await _vault.delete(key: _fullNameKey);
     await _vault.delete(key: _deviceIdKey);
     await clearBiometricCredentials();
     _sessionPassword = null;

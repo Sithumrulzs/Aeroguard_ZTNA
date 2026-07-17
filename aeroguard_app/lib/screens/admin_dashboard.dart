@@ -12,12 +12,17 @@ import '../services/auth_service.dart';
 import '../services/biometric_service.dart';
 import '../services/enclave_service.dart';
 import '../services/notification_service.dart';
-import '../widgets/live_telemetry_panel.dart';
+import '../widgets/network_topology_card.dart';
+import '../widgets/gloss_panel.dart';
 import '../services/network_service.dart';
 import 'sign_in_page.dart';
 import 'device_identity_screen.dart';
 import 'knock_history_screen.dart';
 import 'provision_token_screen.dart';
+
+// Plain, readable casing for names instead of raw stored usernames.
+String _simpleCase(String s) =>
+    s.isEmpty ? s : s[0].toUpperCase() + s.substring(1).toLowerCase();
 
 class AdminDashboard extends StatefulWidget {
   const AdminDashboard({super.key});
@@ -32,7 +37,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   final _overviewKey = GlobalKey<_OverviewTabState>();
 
   late AnimationController _tabCtrl;
-  late Animation<double>   _tabFade;
+  late Animation<double> _tabFade;
 
   @override
   void initState() {
@@ -71,17 +76,17 @@ class _AdminDashboardState extends State<AdminDashboard>
               key: _overviewKey,
               onLogout: _logout,
               onViewHistory: () => _switchTab(2),
+              onViewVault: () => _switchTab(3),
             ),
             const _AccessTab(),
             const KnockHistoryTab(),
-            _VaultTab(onVendorRevoked: () => _overviewKey.currentState?._fetchStats()),
+            _VaultTab(
+              onVendorRevoked: () => _overviewKey.currentState?._fetchStats(),
+            ),
           ],
         ),
       ),
-      bottomNavigationBar: _BottomNav(
-        currentIndex: _index,
-        onTap: _switchTab,
-      ),
+      bottomNavigationBar: _BottomNav(currentIndex: _index, onTap: _switchTab),
     );
   }
 
@@ -222,10 +227,12 @@ class _NavItem extends StatelessWidget {
 class _OverviewTab extends StatefulWidget {
   final VoidCallback onLogout;
   final VoidCallback onViewHistory;
+  final VoidCallback onViewVault;
   const _OverviewTab({
     super.key,
     required this.onLogout,
     required this.onViewHistory,
+    required this.onViewVault,
   });
 
   @override
@@ -235,15 +242,13 @@ class _OverviewTab extends StatefulWidget {
 class _OverviewTabState extends State<_OverviewTab>
     with SingleTickerProviderStateMixin {
   Timer? _timer;
-  String _username       = 'ADMIN';
-  bool   _loadingStats   = true;
-  bool   _statsError     = false;
-  String _registeredAdmins    = '0';
-  String _activeVendors       = '0';
-  String _totalKnocks         = '0';
-  String _gatewayStatus       = '—';
+  String _displayName = 'Admin';
+  bool _loadingStats = true;
+  String _registeredAdmins = '0';
+  String _activeVendors = '0';
+  String _totalKnocks = '0';
   List<String> _registeredAdminNames = [];
-  List<String> _vendorNames          = [];
+  List<String> _vendorNames = [];
 
   late AnimationController _heroCtrl;
   late Animation<double> _heroFade;
@@ -283,8 +288,10 @@ class _OverviewTabState extends State<_OverviewTab>
   }
 
   Future<void> _loadUsername() async {
-    final u = await AuthService.getUsername();
-    if (mounted && u != null) setState(() => _username = u.toUpperCase());
+    final name = await AuthService.getFullName();
+    if (mounted && name != null && name.isNotEmpty) {
+      setState(() => _displayName = name);
+    }
   }
 
   Future<void> _fetchStats() async {
@@ -296,20 +303,29 @@ class _OverviewTabState extends State<_OverviewTab>
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
         setState(() {
-          _registeredAdmins     = '${data['registered_admins'] ?? data['active_admins'] ?? 0}';
-          _activeVendors        = '${data['active_vendors']  ?? 0}';
-          _totalKnocks          = '${data['total_knocks_today'] ?? 0}';
-          _gatewayStatus        = data['gateway_status'] ?? 'SECURED';
-          _registeredAdminNames = List<String>.from(data['registered_admin_names'] ?? data['admin_names'] ?? []);
-          _vendorNames          = List<String>.from(data['vendor_names'] ?? []);
-          _loadingStats  = false;
-          _statsError    = false;
+          _registeredAdmins =
+              '${data['registered_admins'] ?? data['active_admins'] ?? 0}';
+          _activeVendors = '${data['active_vendors'] ?? 0}';
+          _totalKnocks = '${data['total_knocks_today'] ?? 0}';
+          _registeredAdminNames = List<String>.from(
+            data['registered_admin_names'] ?? data['admin_names'] ?? [],
+          );
+          _vendorNames = List<String>.from(data['vendor_names'] ?? []);
+          _loadingStats = false;
         });
       } else {
-        if (mounted) setState(() { _statsError = true; _loadingStats = false; });
+        if (mounted) {
+          setState(() {
+            _loadingStats = false;
+          });
+        }
       }
     } catch (_) {
-      if (mounted) setState(() { _statsError = true; _loadingStats = false; });
+      if (mounted) {
+        setState(() {
+          _loadingStats = false;
+        });
+      }
     }
   }
 
@@ -329,8 +345,17 @@ class _OverviewTabState extends State<_OverviewTab>
           children: [
             // App bar — small kicker on top, a warmer personal greeting
             // carries the visual weight instead of a flat static title.
-            Padding(
-              padding: const EdgeInsets.fromLTRB(24, 16, 12, 0),
+            // A hairline bottom border gives it a defined edge against the
+            // scroll content below, instead of bleeding straight into it.
+            Container(
+              padding: const EdgeInsets.fromLTRB(24, 16, 12, 16),
+              decoration: BoxDecoration(
+                border: Border(
+                  bottom: BorderSide(
+                    color: Colors.white.withValues(alpha: 0.05),
+                  ),
+                ),
+              ),
               child: Row(
                 children: [
                   Column(
@@ -353,7 +378,7 @@ class _OverviewTabState extends State<_OverviewTab>
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '$_greeting, $_username',
+                        '$_greeting, $_displayName',
                         style: const TextStyle(
                           color: Colors.white,
                           fontSize: 18,
@@ -364,108 +389,119 @@ class _OverviewTabState extends State<_OverviewTab>
                     ],
                   ),
                   const Spacer(),
-                  IconButton(
-                    onPressed: widget.onLogout,
-                    icon: const Icon(
-                      Icons.power_settings_new,
-                      color: Color(0xFF475569),
-                      size: 20,
+                  GestureDetector(
+                    onTap: widget.onLogout,
+                    child: Container(
+                      height: 40,
+                      width: 40,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: const Color(0xFF00C3FF).withValues(alpha: 0.10),
+                        border: Border.all(
+                          color: const Color(
+                            0xFF00C3FF,
+                          ).withValues(alpha: 0.25),
+                        ),
+                      ),
+                      child: const Icon(
+                        Icons.power_settings_new,
+                        color: Color(0xFF00C3FF),
+                        size: 18,
+                      ),
                     ),
                   ),
                 ],
               ),
             ),
 
-            const SizedBox(height: 18),
+            // Vendor device/attempt polling still runs here, silently — it
+            // only ever surfaces as an OS popup notification now. Approve
+            // and Decline happen from that notification's own actions, not
+            // from anything rendered on this page.
+            const _PendingDeviceWatcher(),
+            const _VendorAttemptsWatcher(),
 
             Expanded(
               child: SingleChildScrollView(
-                padding: const EdgeInsets.symmetric(horizontal: 24),
+                padding: const EdgeInsets.fromLTRB(24, 24, 24, 32),
                 child: Column(
                   children: [
+                    // Gateway status leads the page — in a Zero Trust
+                    // posture, "is the perimeter secure right now" is the
+                    // single most important thing an admin needs on open.
+                    _GatewayStatusCard(),
+                    const SizedBox(height: 26),
+
                     FadeTransition(
                       opacity: _heroFade,
                       child: SlideTransition(
                         position: _heroSlide,
-                        child: Column(
-                          children: [
-                            _HeroKnocksCard(
-                              value: _totalKnocks,
-                              isLoading: _loadingStats,
-                              onTap: widget.onViewHistory,
-                            ),
-                            const SizedBox(height: 12),
-                            Row(
-                              children: [
-                                Expanded(
-                                  child: _QuickActionButton(
-                                    icon: Icons.qr_code,
-                                    label: 'Provision Vendor',
-                                    color: Colors.orangeAccent,
-                                    onTap: () => Navigator.push(
-                                      context,
-                                      slideUpRoute(const ProvisionTokenScreen()),
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: _QuickActionButton(
-                                    icon: Icons.history_rounded,
-                                    label: 'Knock History',
-                                    color: const Color(0xFF00C3FF),
-                                    onTap: widget.onViewHistory,
-                                  ),
-                                ),
-                              ],
-                            ),
-                            const SizedBox(height: 14),
-                          ],
+                        child: _QuickActionButton(
+                          icon: Icons.qr_code,
+                          label: 'Provision Vendor',
+                          color: Colors.orangeAccent,
+                          large: true,
+                          onTap: () => Navigator.push(
+                            context,
+                            slideUpRoute(const ProvisionTokenScreen()),
+                          ),
                         ),
                       ),
                     ),
-                    _GatewayStatusCard(),
-                    const SizedBox(height: 14),
-                    const _PendingDevicePanel(),
-                    const SizedBox(height: 14),
-                    const _VendorAttemptsPanel(),
-                    GridView.count(
-                      shrinkWrap: true,
-                      physics: const NeverScrollableScrollPhysics(),
-                      crossAxisCount: 3,
-                      mainAxisSpacing: 10,
-                      crossAxisSpacing: 10,
-                      childAspectRatio: 0.86,
-                      children: [
-                        _MetricCard(
-                          label: 'ADMINS',
-                          value: _registeredAdmins,
-                          icon: Icons.person_outline_rounded,
-                          names: _registeredAdminNames,
-                          isLoading: _loadingStats,
-                          accentColor: const Color(0xFF00C3FF),
-                        ),
-                        _MetricCard(
-                          label: 'VENDORS',
-                          value: _activeVendors,
-                          icon: Icons.people_outline_rounded,
-                          names: _vendorNames,
-                          isLoading: _loadingStats,
-                          accentColor: Colors.orangeAccent,
-                        ),
-                        _MetricCard(
-                          label: 'GATEWAY',
-                          value: _statsError ? 'ERR' : _gatewayStatus,
-                          icon: Icons.shield_outlined,
-                          isLoading: _loadingStats,
-                          accentColor: _statsError
-                              ? const Color(0xFFEF4444)
-                              : const Color(0xFF10B981),
-                        ),
-                      ],
+                    const SizedBox(height: 30),
+
+                    // Security posture — the two Zero Trust principals
+                    // (admins & vendors) plus today's knock volume, grouped
+                    // under one labeled section instead of floating loose.
+                    const _SectionLabel(
+                      icon: Icons.verified_user_outlined,
+                      label: 'SECURITY POSTURE',
                     ),
                     const SizedBox(height: 14),
-                    const LiveTelemetryPanel(),
+                    SizedBox(
+                      height: 148,
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: _MetricCard(
+                              label: 'ADMINS',
+                              value: _registeredAdmins,
+                              icon: Icons.admin_panel_settings_outlined,
+                              names: _registeredAdminNames,
+                              isLoading: _loadingStats,
+                              accentColor: const Color(0xFF00C3FF),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _MetricCard(
+                              label: 'VENDORS',
+                              value: _activeVendors,
+                              icon: Icons.badge_outlined,
+                              names: _vendorNames,
+                              isLoading: _loadingStats,
+                              accentColor: Colors.orangeAccent,
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: _MetricCard(
+                              label: 'KNOCKS TODAY',
+                              value: _totalKnocks,
+                              icon: Icons.bolt_rounded,
+                              isLoading: _loadingStats,
+                              accentColor: const Color(0xFF10B981),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 26),
+
+                    NetworkTopologyCard(onViewVault: widget.onViewVault),
+                    const SizedBox(height: 26),
+
+                    _RecentActivityCard(onViewAll: widget.onViewHistory),
                     const SizedBox(height: 24),
                   ],
                 ),
@@ -479,123 +515,31 @@ class _OverviewTabState extends State<_OverviewTab>
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// HERO KNOCKS CARD — promotes the day's most dynamic number out of the
-// uniform metric grid, with a count-up reveal and a direct link into the
-// new History tab.
+// SECTION LABEL — a lightweight kicker for grouping panels, reusing the
+// same icon-badge language as DashboardPanel without another nested box.
 // ─────────────────────────────────────────────────────────────────────────────
-class _HeroKnocksCard extends StatelessWidget {
-  final String value;
-  final bool isLoading;
-  final VoidCallback onTap;
+class _SectionLabel extends StatelessWidget {
+  final IconData icon;
+  final String label;
 
-  const _HeroKnocksCard({
-    required this.value,
-    required this.isLoading,
-    required this.onTap,
-  });
+  const _SectionLabel({required this.icon, required this.label});
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF0D1B2E), Color(0xFF080F1C)],
+    return Row(
+      children: [
+        Icon(icon, color: const Color(0xFF475569), size: 13),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: const TextStyle(
+            color: Color(0xFF475569),
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 2.0,
           ),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: const Color(0xFF00C3FF).withValues(alpha: 0.22)),
-          boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF00C3FF).withValues(alpha: 0.08),
-              blurRadius: 28,
-              spreadRadius: -4,
-            ),
-          ],
         ),
-        child: Row(
-          children: [
-            Container(
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: const Color(0xFF00C3FF).withValues(alpha: 0.12),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: const Icon(Icons.bolt_rounded, color: Color(0xFF00C3FF), size: 24),
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'KNOCKS TODAY',
-                    style: TextStyle(
-                      color: Color(0xFF64748B),
-                      fontSize: 10,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 1.5,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
-                  isLoading
-                      ? const SizedBox(
-                          height: 30,
-                          width: 30,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF00C3FF)),
-                          ),
-                        )
-                      : _CountUpNumber(value: int.tryParse(value) ?? 0),
-                ],
-              ),
-            ),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  'VIEW HISTORY',
-                  style: TextStyle(
-                    color: const Color(0xFF00C3FF).withValues(alpha: 0.8),
-                    fontSize: 9,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 1.0,
-                  ),
-                ),
-                const Icon(Icons.chevron_right, color: Color(0xFF00C3FF), size: 16),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _CountUpNumber extends StatelessWidget {
-  final int value;
-  const _CountUpNumber({required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return TweenAnimationBuilder<double>(
-      tween: Tween<double>(begin: 0, end: value.toDouble()),
-      duration: const Duration(milliseconds: 700),
-      curve: Curves.easeOutCubic,
-      builder: (context, v, child) => Text(
-        v.round().toString(),
-        style: const TextStyle(
-          color: Colors.white,
-          fontSize: 30,
-          fontWeight: FontWeight.w800,
-          height: 1.0,
-        ),
-      ),
+      ],
     );
   }
 }
@@ -605,41 +549,56 @@ class _QuickActionButton extends StatelessWidget {
   final String label;
   final Color color;
   final VoidCallback onTap;
+  final bool large;
 
   const _QuickActionButton({
     required this.icon,
     required this.label,
     required this.color,
     required this.onTap,
+    this.large = false,
   });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 14),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.06),
-          borderRadius: BorderRadius.circular(14),
-          border: Border.all(color: color.withValues(alpha: 0.22)),
-        ),
-        child: Column(
-          children: [
-            Icon(icon, color: color, size: 18),
-            const SizedBox(height: 6),
-            Text(
-              label.toUpperCase(),
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: color,
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 0.8,
+      child: NeutralPanel(
+        accent: color,
+        radius: large ? 16 : 14,
+        padding: EdgeInsets.symmetric(vertical: large ? 18 : 14),
+        child: large
+            ? Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(icon, color: color, size: 20),
+                  const SizedBox(width: 10),
+                  Text(
+                    label,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              )
+            : Column(
+                children: [
+                  Icon(icon, color: color, size: 18),
+                  const SizedBox(height: 6),
+                  Text(
+                    label.toUpperCase(),
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: color,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.8,
+                    ),
+                  ),
+                ],
               ),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -652,20 +611,16 @@ class _GatewayStatusCard extends StatefulWidget {
   State<_GatewayStatusCard> createState() => _GatewayStatusCardState();
 }
 
-class _GatewayStatusCardState extends State<_GatewayStatusCard>
-    with SingleTickerProviderStateMixin {
+class _GatewayStatusCardState extends State<_GatewayStatusCard> {
   Timer? _gwTimer;
   Timer? _threatTimer;
   bool? _online;
   bool? _secured;
 
-  int     _threatCount    = 0;
+  int _threatCount = 0;
   String? _lastThreatIp;
   String? _lastThreatType;
   DateTime? _lastThreatAt;
-
-  late AnimationController _glowCtrl;
-  late Animation<double>   _glowAnim;
 
   bool get _isThreat =>
       _online == true &&
@@ -676,24 +631,22 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard>
   @override
   void initState() {
     super.initState();
-    _glowCtrl = AnimationController(
-      duration: const Duration(milliseconds: 800),
-      vsync: this,
-    );
-    _glowAnim = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(parent: _glowCtrl, curve: Curves.easeInOut),
-    );
     _checkGateway();
     _checkThreats();
-    _gwTimer     = Timer.periodic(const Duration(seconds: 20), (_) => _checkGateway());
-    _threatTimer = Timer.periodic(const Duration(seconds: 8),  (_) => _checkThreats());
+    _gwTimer = Timer.periodic(
+      const Duration(seconds: 20),
+      (_) => _checkGateway(),
+    );
+    _threatTimer = Timer.periodic(
+      const Duration(seconds: 8),
+      (_) => _checkThreats(),
+    );
   }
 
   @override
   void dispose() {
     _gwTimer?.cancel();
     _threatTimer?.cancel();
-    _glowCtrl.dispose();
     super.dispose();
   }
 
@@ -712,7 +665,8 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard>
     if (online) {
       try {
         final socket = await Socket.connect(
-          ApiConstants.gatewayIp, 9999,
+          ApiConstants.gatewayIp,
+          9999,
           timeout: const Duration(seconds: 2),
         );
         socket.destroy();
@@ -727,7 +681,12 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard>
       }
     }
 
-    if (mounted) setState(() { _online = online; _secured = secured; });
+    if (mounted) {
+      setState(() {
+        _online = online;
+        _secured = secured;
+      });
+    }
   }
 
   Future<void> _checkThreats() async {
@@ -742,162 +701,226 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard>
         DateTime? lastAt;
         final lastAtStr = data['last_threat_at'] as String?;
         if (lastAtStr != null) {
-          try { lastAt = DateTime.parse(lastAtStr).toLocal(); } catch (_) {}
+          try {
+            lastAt = DateTime.parse(lastAtStr).toLocal();
+          } catch (_) {}
         }
         setState(() {
-          _threatCount   = count;
-          _lastThreatAt  = lastAt;
-          _lastThreatIp  = data['last_threat_ip']   as String?;
+          _threatCount = count;
+          _lastThreatAt = lastAt;
+          _lastThreatIp = data['last_threat_ip'] as String?;
           _lastThreatType = data['last_threat_type'] as String?;
         });
-        if (_isThreat && !_glowCtrl.isAnimating) {
-          _glowCtrl.repeat(reverse: true);
-        } else if (!_isThreat && _glowCtrl.isAnimating) {
-          _glowCtrl.stop();
-          _glowCtrl.reset();
-        }
       }
     } catch (_) {}
   }
 
   @override
   Widget build(BuildContext context) {
-    final bool checking  = _online == null;
+    final bool checking = _online == null;
     final bool isOffline = _online == false;
-    final bool isThreat  = !checking && !isOffline && _isThreat;
+    final bool isThreat = !checking && !isOffline && _isThreat;
 
-    Color  accent;
+    Color accent;
     String title, subtitle, badge;
+    IconData badgeIcon;
 
     if (checking) {
-      accent   = const Color(0xFF00C3FF);
-      title    = 'GATEWAY';
+      accent = const Color(0xFF00C3FF);
+      title = 'GATEWAY';
       subtitle = 'Checking...';
-      badge    = '···';
+      badge = '···';
+      badgeIcon = Icons.hourglass_top_rounded;
     } else if (isOffline) {
-      accent   = const Color(0xFFEAB308); // yellow
-      title    = 'GATEWAY OFFLINE';
+      accent = const Color(0xFFEF4444); // red — unreachable is a hard failure
+      title = 'GATEWAY OFFLINE';
       subtitle = 'Not reachable';
-      badge    = 'OFFLINE';
+      badge = 'OFFLINE';
+      badgeIcon = Icons.wifi_off_rounded;
     } else if (isThreat) {
-      accent   = const Color(0xFFEF4444); // red
-      title    = 'THREAT DETECTED';
-      final reason = _lastThreatType?.replaceFirst('DENIED - ', '') ?? 'Unauthorized attempt';
+      accent = const Color(0xFFEF4444); // red
+      title = 'THREAT DETECTED';
+      final reason =
+          _lastThreatType?.replaceFirst('DENIED - ', '') ??
+          'Unauthorized attempt';
       subtitle = '$reason · ${_lastThreatIp ?? 'unknown'}';
-      badge    = 'THREAT';
+      badge = 'THREAT';
+      badgeIcon = Icons.warning_amber_rounded;
     } else if (_secured == false) {
-      accent   = const Color(0xFFF59E0B); // amber
-      title    = 'GATEWAY UNSECURED';
+      accent = const Color(0xFFF59E0B); // amber
+      title = 'GATEWAY UNSECURED';
       subtitle = 'Dark mode inactive';
-      badge    = 'UNSECURED';
+      badge = 'UNSECURED';
+      badgeIcon = Icons.lock_open_rounded;
     } else {
-      accent   = const Color(0xFF10B981); // green
-      title    = 'GATEWAY SECURED';
+      accent = const Color(0xFF10B981); // green
+      title = 'GATEWAY SECURED';
       subtitle = 'Zero Trust enforced';
-      badge    = 'ONLINE';
+      badge = 'ONLINE';
+      badgeIcon = Icons.gpp_good_rounded;
     }
 
-    return AnimatedBuilder(
-      animation: _glowAnim,
-      builder: (context, child) {
-        final g = isThreat ? _glowAnim.value : 0.0;
-        return AnimatedContainer(
-          duration: const Duration(milliseconds: 400),
-          width: double.infinity,
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-          decoration: BoxDecoration(
-            color: const Color(0xFF0D1421),
-            borderRadius: BorderRadius.circular(20),
-            border: Border.all(
-              color: accent.withValues(alpha: 0.40 + g * 0.35),
-              width: isThreat ? 1.5 : 1.2,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: accent.withValues(alpha: 0.18 + g * 0.28),
-                blurRadius: 32 + g * 28,
-                spreadRadius: -2 + g * 5,
-              ),
-            ],
-          ),
-          child: child,
-        );
-      },
-      child: Row(
-        children: [
-          checking
-              ? const SizedBox(
-                  width: 8, height: 8,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 1.5,
-                    valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF00C3FF)),
+    return GestureDetector(
+      onTap: () => _showDetailSheet(title, subtitle, accent),
+      child: NeutralPanel(
+        accent: accent,
+        radius: 20,
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+        child: Row(
+          children: [
+            checking
+                ? const SizedBox(
+                    width: 8,
+                    height: 8,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 1.5,
+                      valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF00C3FF)),
+                    ),
+                  )
+                : _PulsingDot(color: accent),
+            const SizedBox(width: 14),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    child: Text(
+                      title,
+                      key: ValueKey(title),
+                      style: TextStyle(
+                        color: accent,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
+                        letterSpacing: 2.0,
+                      ),
+                    ),
                   ),
-                )
-              : _PulsingDot(color: _isThreat ? const Color(0xFFEF4444) :
-                  isOffline ? const Color(0xFFEAB308) :
-                  _secured == true ? const Color(0xFF10B981) : const Color(0xFFF59E0B)),
-          const SizedBox(width: 14),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 300),
-                  child: Text(
-                    title,
-                    key: ValueKey(title),
+                  const SizedBox(height: 2),
+                  AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 300),
+                    child: Text(
+                      subtitle,
+                      key: ValueKey(subtitle),
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.55),
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            AnimatedContainer(
+              duration: const Duration(milliseconds: 400),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+              decoration: BoxDecoration(
+                gradient: glassTint(accent, alpha: 0.20),
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(color: accent.withValues(alpha: 0.4)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(badgeIcon, size: 11, color: accent),
+                  const SizedBox(width: 5),
+                  Text(
+                    badge,
                     style: TextStyle(
-                      color: _isThreat ? const Color(0xFFEF4444) :
-                          isOffline ? const Color(0xFFEAB308) :
-                          _secured == true ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
-                      fontSize: 13,
+                      color: accent,
+                      fontSize: 9,
                       fontWeight: FontWeight.w700,
-                      letterSpacing: 2.0,
+                      letterSpacing: 1.5,
                     ),
                   ),
-                ),
-                const SizedBox(height: 2),
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 300),
-                  child: Text(
-                    subtitle,
-                    key: ValueKey(subtitle),
-                    style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.3),
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 8),
-          AnimatedContainer(
-            duration: const Duration(milliseconds: 400),
-            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-            decoration: BoxDecoration(
-              color: (_isThreat ? const Color(0xFFEF4444) :
-                  isOffline ? const Color(0xFFEAB308) :
-                  _secured == true ? const Color(0xFF10B981) : const Color(0xFFF59E0B))
-                  .withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Text(
-              badge,
-              style: TextStyle(
-                color: _isThreat ? const Color(0xFFEF4444) :
-                    isOffline ? const Color(0xFFEAB308) :
-                    _secured == true ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
-                fontSize: 9,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.5,
+                ],
               ),
             ),
-          ),
-        ],
+            const SizedBox(width: 6),
+            Icon(
+              Icons.chevron_right_rounded,
+              color: accent.withValues(alpha: 0.6),
+              size: 20,
+            ),
+          ],
+        ),
       ),
     );
   }
+
+  void _showDetailSheet(String title, String subtitle, Color accent) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF0D1421),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(Icons.shield_rounded, color: accent, size: 20),
+                  const SizedBox(width: 10),
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Text(subtitle, style: TextStyle(color: accent, fontSize: 12)),
+              const SizedBox(height: 18),
+              _detailRow('Gateway IP', ApiConstants.gatewayIp),
+              _detailRow('Reachable', _online == true ? 'YES' : 'NO'),
+              _detailRow(
+                'Drop-all firewall',
+                _secured == true
+                    ? 'ACTIVE'
+                    : (_secured == false ? 'INACTIVE' : '—'),
+              ),
+              _detailRow('Threats (2 min)', '$_threatCount'),
+              if (_lastThreatAt != null)
+                _detailRow(
+                  'Last threat',
+                  '${_lastThreatType ?? '—'} · ${_lastThreatIp ?? '—'}',
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _detailRow(String label, String value) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 6),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13),
+        ),
+        Text(
+          value,
+          style: const TextStyle(
+            color: Colors.white,
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    ),
+  );
 }
 
 class _MetricCard extends StatelessWidget {
@@ -919,47 +942,23 @@ class _MetricCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF0D1B2E), Color(0xFF080F1C)],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: accentColor.withValues(alpha: 0.28),
-          width: 1,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: accentColor.withValues(alpha: 0.10),
-            blurRadius: 20,
-            spreadRadius: -2,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
+    return NeutralPanel(
+      padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Icon badge — top-left with accent border
+          // Icon badge — top-left with an accent-tinted glass chip.
           Container(
             padding: const EdgeInsets.all(7),
             decoration: BoxDecoration(
-              color: accentColor.withValues(alpha: 0.12),
+              gradient: glassTint(accentColor, alpha: 0.22),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(
-                color: accentColor.withValues(alpha: 0.28),
+                color: accentColor.withValues(alpha: 0.4),
                 width: 0.8,
               ),
             ),
-            child: Icon(
-              icon,
-              color: accentColor.withValues(alpha: 0.95),
-              size: 14,
-            ),
+            child: Icon(icon, color: accentColor, size: 14),
           ),
           const Spacer(),
           // Fixed-height value box — key fix for consistent alignment across all cards
@@ -995,27 +994,239 @@ class _MetricCard extends StatelessWidget {
           Text(
             label,
             style: const TextStyle(
-              color: Color(0xFF475569),
+              color: Color(0xFF94A3B8),
               fontSize: 9,
               letterSpacing: 1.5,
               fontWeight: FontWeight.w600,
             ),
           ),
-          // Fixed-height names row — prevents layout difference between cards
+          // Fixed-height names row — prevents layout difference between cards.
+          // Plain sentence-case text, not a stylized colored/spaced tag.
           SizedBox(
-            height: 14,
+            height: 15,
             child: !isLoading && names.isNotEmpty
                 ? Text(
-                    names.join('  ·  '),
+                    names.map(_simpleCase).join('  ·  '),
                     style: TextStyle(
-                      color: accentColor.withValues(alpha: 0.85),
-                      fontSize: 9,
-                      letterSpacing: 0.3,
+                      color: Colors.white.withValues(alpha: 0.65),
+                      fontSize: 10,
                     ),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                   )
                 : const SizedBox.shrink(),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RECENT ACTIVITY — a short, read-only glance at the latest admin+vendor
+// knocks. Purely informational: approving/declining a vendor device still
+// happens exclusively through the OS popup notification, never here.
+// ─────────────────────────────────────────────────────────────────────────────
+class _ActivityStyle {
+  final String label;
+  final Color color;
+  final IconData icon;
+  const _ActivityStyle(this.label, this.color, this.icon);
+}
+
+_ActivityStyle _activityStyle(String actorType, String status) {
+  if (!status.startsWith('GRANTED')) {
+    return const _ActivityStyle(
+      'Knock denied',
+      Color(0xFFEF4444),
+      Icons.do_not_disturb_on_rounded,
+    );
+  }
+  return actorType == 'vendor'
+      ? const _ActivityStyle(
+          'Vendor tunnel opened',
+          Colors.orangeAccent,
+          Icons.sensors_rounded,
+        )
+      : const _ActivityStyle(
+          'Admin tunnel opened',
+          Color(0xFF00C3FF),
+          Icons.sensors_rounded,
+        );
+}
+
+class _RecentActivityCard extends StatefulWidget {
+  final VoidCallback onViewAll;
+  const _RecentActivityCard({required this.onViewAll});
+
+  @override
+  State<_RecentActivityCard> createState() => _RecentActivityCardState();
+}
+
+class _RecentActivityCardState extends State<_RecentActivityCard> {
+  Timer? _timer;
+  List<Map<String, dynamic>> _knocks = [];
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _fetch();
+    _timer = Timer.periodic(const Duration(seconds: 10), (_) => _fetch());
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _fetch() async {
+    try {
+      final res = await http
+          .get(Uri.parse('${ApiConstants.knockHistoryEndpoint}?limit=4'))
+          .timeout(const Duration(seconds: 10));
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body) as Map<String, dynamic>;
+        setState(() {
+          _knocks = List<Map<String, dynamic>>.from(data['knocks'] ?? []);
+          _loading = false;
+        });
+      } else {
+        if (mounted) setState(() => _loading = false);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  String _relativeTime(String? iso) {
+    if (iso == null) return '—';
+    try {
+      final dt = DateTime.parse(iso).toLocal();
+      final diff = DateTime.now().difference(dt);
+      if (diff.inMinutes < 1) return 'just now';
+      if (diff.inMinutes < 60) return '${diff.inMinutes}m ago';
+      if (diff.inHours < 24) return '${diff.inHours}h ago';
+      return '${diff.inDays}d ago';
+    } catch (_) {
+      return '—';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: const Color(0xFF0D1421),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Text(
+                'Recent activity',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const Spacer(),
+              GestureDetector(
+                onTap: widget.onViewAll,
+                child: const Text(
+                  'View all',
+                  style: TextStyle(
+                    color: Color(0xFF00C3FF),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.symmetric(vertical: 10),
+              child: Center(
+                child: SizedBox(
+                  height: 18,
+                  width: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 1.5,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      Color(0xFF00C3FF),
+                    ),
+                  ),
+                ),
+              ),
+            )
+          else if (_knocks.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 6),
+              child: Text(
+                'No knock activity yet',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.35),
+                  fontSize: 12,
+                ),
+              ),
+            )
+          else
+            for (final k in _knocks)
+              _ActivityRow(
+                knock: k,
+                timeLabel: _relativeTime(k['created_at'] as String?),
+              ),
+        ],
+      ),
+    );
+  }
+}
+
+class _ActivityRow extends StatelessWidget {
+  final Map<String, dynamic> knock;
+  final String timeLabel;
+  const _ActivityRow({required this.knock, required this.timeLabel});
+
+  @override
+  Widget build(BuildContext context) {
+    final actorType = knock['actor_type'] as String? ?? 'admin';
+    final status = knock['status'] as String? ?? '';
+    final username = knock['username'] as String? ?? '—';
+    final style = _activityStyle(actorType, status);
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        children: [
+          Icon(style.icon, color: style.color, size: 15),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Text(
+              '${_simpleCase(username)} — ${style.label}',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 12,
+                fontWeight: FontWeight.w500,
+              ),
+              overflow: TextOverflow.ellipsis,
+            ),
+          ),
+          Text(
+            timeLabel,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.35),
+              fontSize: 10,
+            ),
           ),
         ],
       ),
@@ -1039,8 +1250,9 @@ class _AccessTabState extends State<_AccessTab>
     with SingleTickerProviderStateMixin {
   _KnockStatus _knockStatus = _KnockStatus.idle;
   String _tunnelLabel = 'Standby — Awaiting knock';
-  String _username    = '';
+  String _username = '';
   Timer? _gatewayPollTimer;
+  int _offlineStreak = 0;
   final AudioPlayer _knockPlayer = AudioPlayer();
 
   late AnimationController _headerCtrl;
@@ -1076,7 +1288,8 @@ class _AccessTabState extends State<_AccessTab>
   Future<void> _resumeSessionStatus(String username) async {
     try {
       final uri = Uri.parse(
-          '${ApiConstants.adminSessionStatusEndpoint}?username=$username');
+        '${ApiConstants.adminSessionStatusEndpoint}?username=$username',
+      );
       final res = await http.get(uri).timeout(const Duration(seconds: 6));
       // Only apply if the user hasn't already interacted with the knock
       // button while this was in flight — don't clobber a real-time tap
@@ -1094,10 +1307,17 @@ class _AccessTabState extends State<_AccessTab>
     } catch (_) {}
   }
 
-  /// Polls gateway health every 12s while connected.
-  /// Resets to idle automatically if the gateway goes offline.
+  /// Polls gateway health every 12s while connected. Resets to idle only
+  /// after 3 consecutive failed checks (36s), not a single one — a lone
+  /// failed request (a transient WiFi blip, or the gateway mid-restart)
+  /// used to flip the button back to idle immediately even though the
+  /// session was still genuinely active, which read as "it never showed
+  /// connected" if you weren't watching at the exact moment it happened.
+  static const int _maxOfflineStreak = 3;
+
   void _startGatewayPolling() {
     _gatewayPollTimer?.cancel();
+    _offlineStreak = 0;
     _gatewayPollTimer = Timer.periodic(const Duration(seconds: 12), (_) async {
       if (_knockStatus != _KnockStatus.success) {
         _gatewayPollTimer?.cancel();
@@ -1112,15 +1332,24 @@ class _AccessTabState extends State<_AccessTab>
       } catch (_) {
         online = false;
       }
-      if (!online && mounted && _knockStatus == _KnockStatus.success) {
-        _gatewayPollTimer?.cancel();
-        setState(() {
-          _knockStatus = _KnockStatus.idle;
-          _tunnelLabel = 'Gateway offline — session ended';
-        });
-        await Future.delayed(const Duration(seconds: 3));
-        if (mounted) setState(() => _tunnelLabel = 'Standby — Awaiting knock');
+
+      if (!mounted || _knockStatus != _KnockStatus.success) return;
+
+      if (online) {
+        _offlineStreak = 0;
+        return;
       }
+
+      _offlineStreak++;
+      if (_offlineStreak < _maxOfflineStreak) return;
+
+      _gatewayPollTimer?.cancel();
+      setState(() {
+        _knockStatus = _KnockStatus.idle;
+        _tunnelLabel = 'Gateway offline — session ended';
+      });
+      await Future.delayed(const Duration(seconds: 3));
+      if (mounted) setState(() => _tunnelLabel = 'Standby — Awaiting knock');
     });
   }
 
@@ -1207,10 +1436,10 @@ class _AccessTabState extends State<_AccessTab>
   };
 
   String get _knockLabel => switch (_knockStatus) {
-    _KnockStatus.idle    => 'TAP TO INITIATE KNOCK',
+    _KnockStatus.idle => 'TAP TO INITIATE KNOCK',
     _KnockStatus.knocking => 'ESTABLISHING TUNNEL...',
     _KnockStatus.success => 'GATEWAY ACTIVE  ·  TAP TO CLOSE',
-    _KnockStatus.failed  => 'ACCESS DENIED',
+    _KnockStatus.failed => 'ACCESS DENIED',
   };
 
   @override
@@ -1591,13 +1820,13 @@ class _VaultTab extends StatefulWidget {
 }
 
 class _VaultTabState extends State<_VaultTab> {
-  Timer?  _timer;
-  bool    _loading     = true;
-  bool    _error       = false;
-  String  _deviceId    = '—';
+  Timer? _timer;
+  bool _loading = true;
+  bool _error = false;
+  String _deviceId = '—';
   String? _lastKnockAt;
   List<Map<String, dynamic>> _sessions = [];
-  bool    _biometricEnrollable = false;
+  bool _biometricEnrollable = false;
 
   @override
   void initState() {
@@ -1605,7 +1834,10 @@ class _VaultTabState extends State<_VaultTab> {
     _loadDeviceId();
     _fetchVaultData();
     _checkBiometricEnrollable();
-    _timer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchVaultData());
+    _timer = Timer.periodic(
+      const Duration(seconds: 30),
+      (_) => _fetchVaultData(),
+    );
   }
 
   /// True only when the sensor can actually complete a prompt AND nothing
@@ -1613,7 +1845,7 @@ class _VaultTabState extends State<_VaultTab> {
   /// admin who declined the enable-dialog after their last manual login.
   Future<void> _checkBiometricEnrollable() async {
     final available = await BiometricService.isAvailable();
-    final enrolled  = await AuthService.hasBiometricCredentials();
+    final enrolled = await AuthService.hasBiometricCredentials();
     if (mounted) {
       setState(() => _biometricEnrollable = available && !enrolled);
     }
@@ -1625,12 +1857,16 @@ class _VaultTabState extends State<_VaultTab> {
   /// except inside the biometric credential store itself.
   Future<void> _enableBiometric() async {
     final result = await BiometricService.authenticate(
-      reason: 'AeroGuard ZTNA: Confirm your identity to enable biometric sign-in.',
+      reason:
+          'AeroGuard ZTNA: Confirm your identity to enable biometric sign-in.',
     );
     if (!mounted) return;
 
     if (result != BiometricAuthResult.success) {
-      _showSnack(BiometricService.describeResult(result), const Color(0xFF334155));
+      _showSnack(
+        BiometricService.describeResult(result),
+        const Color(0xFF334155),
+      );
       return;
     }
 
@@ -1653,14 +1889,18 @@ class _VaultTabState extends State<_VaultTab> {
   }
 
   void _showSnack(String message, Color color) {
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      content: Text(message,
-          style: const TextStyle(color: Colors.white, fontSize: 13)),
-      backgroundColor: color,
-      behavior: SnackBarBehavior.floating,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      margin: const EdgeInsets.all(16),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          message,
+          style: const TextStyle(color: Colors.white, fontSize: 13),
+        ),
+        backgroundColor: color,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+        margin: const EdgeInsets.all(16),
+      ),
+    );
   }
 
   @override
@@ -1683,42 +1923,73 @@ class _VaultTabState extends State<_VaultTab> {
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body) as Map<String, dynamic>;
         setState(() {
-          _sessions    = List<Map<String, dynamic>>.from(data['sessions'] ?? []);
+          _sessions = List<Map<String, dynamic>>.from(data['sessions'] ?? []);
           _lastKnockAt = data['last_knock_at'] as String?;
-          _loading     = false;
-          _error       = false;
+          _loading = false;
+          _error = false;
         });
       } else {
-        if (mounted) setState(() { _error = true; _loading = false; });
+        if (mounted) {
+          setState(() {
+            _error = true;
+            _loading = false;
+          });
+        }
       }
     } catch (_) {
-      if (mounted) setState(() { _error = true; _loading = false; });
+      if (mounted) {
+        setState(() {
+          _error = true;
+          _loading = false;
+        });
+      }
     }
   }
 
   Future<void> _revokeVendor(Map<String, dynamic> session) async {
     final vendorUsername = session['vendor_username']?.toString() ?? '—';
-    final company        = session['company_name']?.toString()    ?? vendorUsername;
+    final company = session['company_name']?.toString() ?? vendorUsername;
 
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: const Color(0xFF0D1421),
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text('REVOKE SESSION?',
-            style: TextStyle(color: Color(0xFFEF4444), fontSize: 14, letterSpacing: 2.0, fontWeight: FontWeight.bold)),
+        title: const Text(
+          'REVOKE SESSION?',
+          style: TextStyle(
+            color: Color(0xFFEF4444),
+            fontSize: 14,
+            letterSpacing: 2.0,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
         content: Text(
           'Terminate the active tunnel for $company? This will immediately cut their network access.',
-          style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 13, height: 1.5),
+          style: const TextStyle(
+            color: Color(0xFF94A3B8),
+            fontSize: 13,
+            height: 1.5,
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('CANCEL', style: TextStyle(color: Color(0xFF475569), letterSpacing: 1.0)),
+            child: const Text(
+              'CANCEL',
+              style: TextStyle(color: Color(0xFF475569), letterSpacing: 1.0),
+            ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('REVOKE', style: TextStyle(color: Color(0xFFEF4444), letterSpacing: 1.0, fontWeight: FontWeight.w700)),
+            child: const Text(
+              'REVOKE',
+              style: TextStyle(
+                color: Color(0xFFEF4444),
+                letterSpacing: 1.0,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ),
         ],
       ),
@@ -1728,35 +1999,56 @@ class _VaultTabState extends State<_VaultTab> {
 
     try {
       final adminUsername = await AuthService.getUsername() ?? 'admin';
-      final res = await http.post(
-        Uri.parse(ApiConstants.revokeVendorEndpoint),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'admin_username': adminUsername, 'vendor_username': vendorUsername}),
-      ).timeout(const Duration(seconds: 15));
+      final res = await http
+          .post(
+            Uri.parse(ApiConstants.revokeVendorEndpoint),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'admin_username': adminUsername,
+              'vendor_username': vendorUsername,
+            }),
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (!mounted) return;
       if (res.statusCode == 200) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: Text('$company session revoked.',
-              style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w600, fontSize: 13)),
-          backgroundColor: const Color(0xFFEF4444),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          margin: const EdgeInsets.all(16),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              '$company session revoked.',
+              style: const TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w600,
+                fontSize: 13,
+              ),
+            ),
+            backgroundColor: const Color(0xFFEF4444),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
         _fetchVaultData();
         widget.onVendorRevoked?.call();
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('Revoke failed — check connection.',
-              style: TextStyle(color: Colors.white, fontSize: 13)),
-          backgroundColor: const Color(0xFF334155),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-          margin: const EdgeInsets.all(16),
-        ));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const Text(
+              'Revoke failed — check connection.',
+              style: TextStyle(color: Colors.white, fontSize: 13),
+            ),
+            backgroundColor: const Color(0xFF334155),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+            margin: const EdgeInsets.all(16),
+          ),
+        );
       }
     }
   }
@@ -1764,7 +2056,7 @@ class _VaultTabState extends State<_VaultTab> {
   String _timeRemaining(String? validUntil) {
     if (validUntil == null) return '—';
     try {
-      final expiry    = DateTime.parse(validUntil).toUtc();
+      final expiry = DateTime.parse(validUntil).toUtc();
       final remaining = expiry.difference(DateTime.now().toUtc());
       if (remaining.isNegative) return 'EXPIRED';
       if (remaining.inHours > 0) {
@@ -1780,7 +2072,20 @@ class _VaultTabState extends State<_VaultTab> {
     if (iso == null) return 'No events recorded';
     try {
       final dt = DateTime.parse(iso).toLocal();
-      const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      const months = [
+        'Jan',
+        'Feb',
+        'Mar',
+        'Apr',
+        'May',
+        'Jun',
+        'Jul',
+        'Aug',
+        'Sep',
+        'Oct',
+        'Nov',
+        'Dec',
+      ];
       final h = dt.hour.toString().padLeft(2, '0');
       final m = dt.minute.toString().padLeft(2, '0');
       return '${months[dt.month - 1]} ${dt.day}  ·  $h:$m';
@@ -1806,37 +2111,86 @@ class _VaultTabState extends State<_VaultTab> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: 24),
-              const Text('HARDWARE VAULT',
-                  style: TextStyle(color: Colors.white, fontSize: 17, fontWeight: FontWeight.bold, letterSpacing: 1.5)),
+              const Text(
+                'HARDWARE VAULT',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 17,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 1.5,
+                ),
+              ),
               const SizedBox(height: 4),
-              Text('Device identity & active sessions',
-                  style: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 12)),
+              Text(
+                'Device identity & active sessions',
+                style: TextStyle(
+                  color: Colors.white.withValues(alpha: 0.3),
+                  fontSize: 12,
+                ),
+              ),
               const SizedBox(height: 20),
 
               // ── Secure Enclave ──────────────────────────────────────────
               _card(
                 borderColor: const Color(0xFF00C3FF).withValues(alpha: 0.1),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    _iconBox(Icons.memory, const Color(0xFF00C3FF)),
-                    const SizedBox(width: 14),
-                    Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      const Text('SECURE ENCLAVE',
-                          style: TextStyle(color: Color(0xFF475569), fontSize: 10, letterSpacing: 1.5, fontWeight: FontWeight.w600)),
-                      const SizedBox(height: 2),
-                      Text(_deviceId,
-                          style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-                    ]),
-                  ]),
-                  Divider(color: Colors.white.withValues(alpha: 0.05), height: 24),
-                  Text('ECDSA P-256 key pair locked in hardware vault.',
-                      style: TextStyle(color: Colors.white.withValues(alpha: 0.3), fontSize: 11, height: 1.5)),
-                  const SizedBox(height: 16),
-                  GestureDetector(
-                    onTap: () => Navigator.push(context, slideUpRoute(const DeviceIdentityScreen())),
-                    child: _outlineBtn('VIEW FULL IDENTITY', Icons.vpn_key_outlined, const Color(0xFF00C3FF)),
-                  ),
-                ]),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        _iconBox(Icons.memory, const Color(0xFF00C3FF)),
+                        const SizedBox(width: 14),
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            const Text(
+                              'SECURE ENCLAVE',
+                              style: TextStyle(
+                                color: Color(0xFF475569),
+                                fontSize: 10,
+                                letterSpacing: 1.5,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _deviceId,
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                    Divider(
+                      color: Colors.white.withValues(alpha: 0.05),
+                      height: 24,
+                    ),
+                    Text(
+                      'ECDSA P-256 key pair locked in hardware vault.',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.3),
+                        fontSize: 11,
+                        height: 1.5,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    GestureDetector(
+                      onTap: () => Navigator.push(
+                        context,
+                        slideUpRoute(const DeviceIdentityScreen()),
+                      ),
+                      child: _outlineBtn(
+                        'VIEW FULL IDENTITY',
+                        Icons.vpn_key_outlined,
+                        const Color(0xFF00C3FF),
+                      ),
+                    ),
+                  ],
+                ),
               ),
 
               const SizedBox(height: 12),
@@ -1844,21 +2198,46 @@ class _VaultTabState extends State<_VaultTab> {
               // ── Last knock event ────────────────────────────────────────
               _card(
                 borderColor: const Color(0xFF00C3FF).withValues(alpha: 0.08),
-                child: Row(children: [
-                  _iconBox(Icons.bolt_outlined, const Color(0xFF00C3FF)),
-                  const SizedBox(width: 14),
-                  Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                    const Text('LAST KNOCK EVENT',
-                        style: TextStyle(color: Color(0xFF475569), fontSize: 10, letterSpacing: 1.5, fontWeight: FontWeight.w600)),
-                    const SizedBox(height: 4),
-                    _loading
-                        ? const SizedBox(height: 14, width: 14,
-                            child: CircularProgressIndicator(strokeWidth: 1.5,
-                                valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF00C3FF))))
-                        : Text(_formatTimestamp(_lastKnockAt),
-                            style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-                  ]),
-                ]),
+                child: Row(
+                  children: [
+                    _iconBox(Icons.bolt_outlined, const Color(0xFF00C3FF)),
+                    const SizedBox(width: 14),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text(
+                          'LAST KNOCK EVENT',
+                          style: TextStyle(
+                            color: Color(0xFF475569),
+                            fontSize: 10,
+                            letterSpacing: 1.5,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        _loading
+                            ? const SizedBox(
+                                height: 14,
+                                width: 14,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.5,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    Color(0xFF00C3FF),
+                                  ),
+                                ),
+                              )
+                            : Text(
+                                _formatTimestamp(_lastKnockAt),
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                      ],
+                    ),
+                  ],
+                ),
               ),
 
               const SizedBox(height: 12),
@@ -1866,66 +2245,137 @@ class _VaultTabState extends State<_VaultTab> {
               // ── Active vendor sessions ──────────────────────────────────
               _card(
                 borderColor: Colors.orangeAccent.withValues(alpha: 0.15),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  Row(children: [
-                    _iconBox(Icons.people_outline_rounded, Colors.orangeAccent),
-                    const SizedBox(width: 14),
-                    const Expanded(
-                      child: Text('ACTIVE VENDOR SESSIONS',
-                          style: TextStyle(color: Color(0xFF475569), fontSize: 10, letterSpacing: 1.5, fontWeight: FontWeight.w600)),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        _iconBox(
+                          Icons.people_outline_rounded,
+                          Colors.orangeAccent,
+                        ),
+                        const SizedBox(width: 14),
+                        const Expanded(
+                          child: Text(
+                            'ACTIVE VENDOR SESSIONS',
+                            style: TextStyle(
+                              color: Color(0xFF475569),
+                              fontSize: 10,
+                              letterSpacing: 1.5,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ),
+                        if (!_loading)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 4,
+                            ),
+                            decoration: BoxDecoration(
+                              color: Colors.orangeAccent.withValues(
+                                alpha: 0.12,
+                              ),
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              '${_sessions.length}',
+                              style: const TextStyle(
+                                color: Colors.orangeAccent,
+                                fontSize: 12,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
-                    if (!_loading)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.orangeAccent.withValues(alpha: 0.12),
-                          borderRadius: BorderRadius.circular(20),
+                    Divider(
+                      color: Colors.white.withValues(alpha: 0.05),
+                      height: 20,
+                    ),
+                    if (_loading)
+                      const Center(
+                        child: Padding(
+                          padding: EdgeInsets.symmetric(vertical: 10),
+                          child: SizedBox(
+                            height: 20,
+                            width: 20,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 1.5,
+                              valueColor: AlwaysStoppedAnimation<Color>(
+                                Colors.orangeAccent,
+                              ),
+                            ),
+                          ),
                         ),
-                        child: Text('${_sessions.length}',
-                            style: const TextStyle(color: Colors.orangeAccent, fontSize: 12, fontWeight: FontWeight.bold)),
-                      ),
-                  ]),
-                  Divider(color: Colors.white.withValues(alpha: 0.05), height: 20),
-                  if (_loading)
-                    const Center(child: Padding(
-                      padding: EdgeInsets.symmetric(vertical: 10),
-                      child: SizedBox(height: 20, width: 20,
-                          child: CircularProgressIndicator(strokeWidth: 1.5,
-                              valueColor: AlwaysStoppedAnimation<Color>(Colors.orangeAccent))),
-                    ))
-                  else if (_error)
-                    Row(children: [
-                      Icon(Icons.wifi_off_outlined,
-                          color: const Color(0xFFEF4444).withValues(alpha: 0.6), size: 15),
-                      const SizedBox(width: 10),
-                      const Text('Unable to load sessions.',
-                          style: TextStyle(color: Color(0xFF475569), fontSize: 12)),
-                    ])
-                  else if (_sessions.isEmpty)
-                    Row(children: [
-                      Icon(Icons.check_circle_outline,
-                          color: const Color(0xFF10B981).withValues(alpha: 0.6), size: 15),
-                      const SizedBox(width: 10),
-                      const Text('No active vendor sessions',
-                          style: TextStyle(color: Color(0xFF475569), fontSize: 12)),
-                    ])
-                  else
-                    ...List.generate(_sessions.length, (i) {
-                      final s = _sessions[i];
-                      return Column(children: [
-                        _VendorSessionRow(
-                          vendorUsername: s['vendor_username']?.toString() ?? '—',
-                          company:        s['company_name']?.toString()    ?? '—',
-                          clearance:      s['clearance_level']?.toString() ?? '—',
-                          timeRemaining:  _timeRemaining(s['valid_until']?.toString()),
-                          status:         s['status']?.toString()          ?? '—',
-                          onRevoke: () => _revokeVendor(s),
-                        ),
-                        if (i < _sessions.length - 1)
-                          Divider(color: Colors.white.withValues(alpha: 0.04), height: 16),
-                      ]);
-                    }),
-                ]),
+                      )
+                    else if (_error)
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.wifi_off_outlined,
+                            color: const Color(
+                              0xFFEF4444,
+                            ).withValues(alpha: 0.6),
+                            size: 15,
+                          ),
+                          const SizedBox(width: 10),
+                          const Text(
+                            'Unable to load sessions.',
+                            style: TextStyle(
+                              color: Color(0xFF475569),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      )
+                    else if (_sessions.isEmpty)
+                      Row(
+                        children: [
+                          Icon(
+                            Icons.check_circle_outline,
+                            color: const Color(
+                              0xFF10B981,
+                            ).withValues(alpha: 0.6),
+                            size: 15,
+                          ),
+                          const SizedBox(width: 10),
+                          const Text(
+                            'No active vendor sessions',
+                            style: TextStyle(
+                              color: Color(0xFF475569),
+                              fontSize: 12,
+                            ),
+                          ),
+                        ],
+                      )
+                    else
+                      ...List.generate(_sessions.length, (i) {
+                        final s = _sessions[i];
+                        return Column(
+                          children: [
+                            _VendorSessionRow(
+                              vendorUsername:
+                                  s['vendor_username']?.toString() ?? '—',
+                              company: s['company_name']?.toString() ?? '—',
+                              clearance:
+                                  s['clearance_level']?.toString() ?? '—',
+                              timeRemaining: _timeRemaining(
+                                s['valid_until']?.toString(),
+                              ),
+                              status: s['status']?.toString() ?? '—',
+                              onRevoke: () => _revokeVendor(s),
+                            ),
+                            if (i < _sessions.length - 1)
+                              Divider(
+                                color: Colors.white.withValues(alpha: 0.04),
+                                height: 16,
+                              ),
+                          ],
+                        );
+                      }),
+                  ],
+                ),
               ),
 
               const SizedBox(height: 12),
@@ -1933,35 +2383,54 @@ class _VaultTabState extends State<_VaultTab> {
               // ── Security actions ────────────────────────────────────────
               _card(
                 borderColor: Colors.white.withValues(alpha: 0.05),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const Text('SECURITY ACTIONS',
-                      style: TextStyle(color: Color(0xFF475569), fontSize: 10, letterSpacing: 1.5, fontWeight: FontWeight.w600)),
-                  const SizedBox(height: 16),
-                  if (_biometricEnrollable) ...[
-                    _VaultAction(
-                      icon: Icons.fingerprint,
-                      label: 'Enable Biometric Sign-In',
-                      subtitle: 'Unlock with fingerprint next time',
-                      color: const Color(0xFF10B981),
-                      onTap: _enableBiometric,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'SECURITY ACTIONS',
+                      style: TextStyle(
+                        color: Color(0xFF475569),
+                        fontSize: 10,
+                        letterSpacing: 1.5,
+                        fontWeight: FontWeight.w600,
+                      ),
                     ),
-                    Divider(color: Colors.white.withValues(alpha: 0.05), height: 20),
+                    const SizedBox(height: 16),
+                    if (_biometricEnrollable) ...[
+                      _VaultAction(
+                        icon: Icons.fingerprint,
+                        label: 'Enable Biometric Sign-In',
+                        subtitle: 'Unlock with fingerprint next time',
+                        color: const Color(0xFF10B981),
+                        onTap: _enableBiometric,
+                      ),
+                      Divider(
+                        color: Colors.white.withValues(alpha: 0.05),
+                        height: 20,
+                      ),
+                    ],
+                    _VaultAction(
+                      icon: Icons.qr_code,
+                      label: 'Provision Vendor Token',
+                      subtitle: 'Generate JIT QR access',
+                      onTap: () => Navigator.push(
+                        context,
+                        slideUpRoute(const ProvisionTokenScreen()),
+                      ),
+                    ),
+                    Divider(
+                      color: Colors.white.withValues(alpha: 0.05),
+                      height: 20,
+                    ),
+                    _VaultAction(
+                      icon: Icons.delete_outline,
+                      label: 'Revoke This Device',
+                      subtitle: 'Destroy hardware keys',
+                      color: const Color(0xFFEF4444),
+                      onTap: () {},
+                    ),
                   ],
-                  _VaultAction(
-                    icon: Icons.qr_code,
-                    label: 'Provision Vendor Token',
-                    subtitle: 'Generate JIT QR access',
-                    onTap: () => Navigator.push(context, slideUpRoute(const ProvisionTokenScreen())),
-                  ),
-                  Divider(color: Colors.white.withValues(alpha: 0.05), height: 20),
-                  _VaultAction(
-                    icon: Icons.delete_outline,
-                    label: 'Revoke This Device',
-                    subtitle: 'Destroy hardware keys',
-                    color: const Color(0xFFEF4444),
-                    onTap: () {},
-                  ),
-                ]),
+                ),
               ),
 
               const SizedBox(height: 24),
@@ -1972,7 +2441,8 @@ class _VaultTabState extends State<_VaultTab> {
     );
   }
 
-  Widget _card({required Widget child, required Color borderColor}) => Container(
+  Widget _card({required Widget child, required Color borderColor}) =>
+      Container(
         width: double.infinity,
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
@@ -1984,28 +2454,39 @@ class _VaultTabState extends State<_VaultTab> {
       );
 
   Widget _iconBox(IconData icon, Color color) => Container(
-        padding: const EdgeInsets.all(8),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.1),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Icon(icon, color: color, size: 18),
-      );
+    padding: const EdgeInsets.all(8),
+    decoration: BoxDecoration(
+      color: color.withValues(alpha: 0.1),
+      borderRadius: BorderRadius.circular(10),
+    ),
+    child: Icon(icon, color: color, size: 18),
+  );
 
   Widget _outlineBtn(String label, IconData icon, Color color) => Container(
-        width: double.infinity,
-        padding: const EdgeInsets.symmetric(vertical: 12),
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10),
-          border: Border.all(color: color.withValues(alpha: 0.3)),
-          color: color.withValues(alpha: 0.05),
+    width: double.infinity,
+    padding: const EdgeInsets.symmetric(vertical: 12),
+    decoration: BoxDecoration(
+      borderRadius: BorderRadius.circular(10),
+      border: Border.all(color: color.withValues(alpha: 0.3)),
+      color: color.withValues(alpha: 0.05),
+    ),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: [
+        Icon(icon, color: color, size: 14),
+        const SizedBox(width: 8),
+        Text(
+          label,
+          style: TextStyle(
+            color: color,
+            fontSize: 11,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 1.5,
+          ),
         ),
-        child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-          Icon(icon, color: color, size: 14),
-          const SizedBox(width: 8),
-          Text(label, style: TextStyle(color: color, fontSize: 11, fontWeight: FontWeight.w700, letterSpacing: 1.5)),
-        ]),
-      );
+      ],
+    ),
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2040,30 +2521,63 @@ class _VendorSessionRow extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Container(
-              height: 7, width: 7,
+              height: 7,
+              width: 7,
               decoration: BoxDecoration(
-                shape: BoxShape.circle, color: dotColor,
-                boxShadow: [BoxShadow(color: dotColor.withValues(alpha: 0.5), blurRadius: 6)],
+                shape: BoxShape.circle,
+                color: dotColor,
+                boxShadow: [
+                  BoxShadow(
+                    color: dotColor.withValues(alpha: 0.5),
+                    blurRadius: 6,
+                  ),
+                ],
               ),
             ),
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(company,
-                  style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
-              const SizedBox(height: 2),
-              Text('$vendorUsername  ·  ${clearance.toUpperCase()}',
-                  style: const TextStyle(color: Color(0xFF475569), fontSize: 10, letterSpacing: 0.4)),
-              const SizedBox(height: 5),
-              Row(children: [
-                Icon(Icons.timer_outlined,
-                    color: Colors.orangeAccent.withValues(alpha: 0.7), size: 11),
-                const SizedBox(width: 4),
-                Text(timeRemaining,
-                    style: const TextStyle(color: Colors.orangeAccent, fontSize: 10, letterSpacing: 0.3)),
-              ]),
-            ]),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  company,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  '$vendorUsername  ·  ${clearance.toUpperCase()}',
+                  style: const TextStyle(
+                    color: Color(0xFF475569),
+                    fontSize: 10,
+                    letterSpacing: 0.4,
+                  ),
+                ),
+                const SizedBox(height: 5),
+                Row(
+                  children: [
+                    Icon(
+                      Icons.timer_outlined,
+                      color: Colors.orangeAccent.withValues(alpha: 0.7),
+                      size: 11,
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      timeRemaining,
+                      style: const TextStyle(
+                        color: Colors.orangeAccent,
+                        fontSize: 10,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
           const SizedBox(width: 8),
           GestureDetector(
@@ -2073,10 +2587,19 @@ class _VendorSessionRow extends StatelessWidget {
               decoration: BoxDecoration(
                 color: const Color(0xFFEF4444).withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: const Color(0xFFEF4444).withValues(alpha: 0.35)),
+                border: Border.all(
+                  color: const Color(0xFFEF4444).withValues(alpha: 0.35),
+                ),
               ),
-              child: const Text('REVOKE',
-                  style: TextStyle(color: Color(0xFFEF4444), fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.2)),
+              child: const Text(
+                'REVOKE',
+                style: TextStyle(
+                  color: Color(0xFFEF4444),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 1.2,
+                ),
+              ),
             ),
           ),
         ],
@@ -2113,18 +2636,26 @@ class _VaultAction extends StatelessWidget {
           Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(label,
-                  style: TextStyle(
-                    color: isDanger ? const Color(0xFFEF4444) : Colors.white,
-                    fontSize: 13, fontWeight: FontWeight.w500,
-                  )),
-              Text(subtitle,
-                  style: const TextStyle(color: Color(0xFF475569), fontSize: 11)),
+              Text(
+                label,
+                style: TextStyle(
+                  color: isDanger ? const Color(0xFFEF4444) : Colors.white,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w500,
+                ),
+              ),
+              Text(
+                subtitle,
+                style: const TextStyle(color: Color(0xFF475569), fontSize: 11),
+              ),
             ],
           ),
           const Spacer(),
-          Icon(Icons.chevron_right,
-              color: const Color(0xFF475569).withValues(alpha: 0.5), size: 18),
+          Icon(
+            Icons.chevron_right,
+            color: const Color(0xFF475569).withValues(alpha: 0.5),
+            size: 18,
+          ),
         ],
       ),
     );
@@ -2132,20 +2663,25 @@ class _VaultAction extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// PENDING VENDOR DEVICE APPROVAL PANEL
+// PENDING VENDOR DEVICE WATCHER — no inline card, no inline Approve/Deny.
+// Keeps polling in the background purely to fire the OS popup notification
+// (see NotificationService.showVendorDeviceAlert); the notification's own
+// Approve/Decline actions are what actually reach the backend now, whether
+// or not this screen is even open.
 // ─────────────────────────────────────────────────────────────────────────────
-class _PendingDevicePanel extends StatefulWidget {
-  const _PendingDevicePanel();
+class _PendingDeviceWatcher extends StatefulWidget {
+  const _PendingDeviceWatcher();
 
   @override
-  State<_PendingDevicePanel> createState() => _PendingDevicePanelState();
+  State<_PendingDeviceWatcher> createState() => _PendingDeviceWatcherState();
 }
 
-class _PendingDevicePanelState extends State<_PendingDevicePanel> {
+class _PendingDeviceWatcherState extends State<_PendingDeviceWatcher> {
   Timer? _timer;
-  List<Map<String, dynamic>> _pending = [];
-  final Set<String> _seenTokens       = {};   // notified at all (device known or not)
-  final Set<String> _knownNotified    = {};   // already sent the Approve/Decline variant
+  final Set<String> _seenTokens = {}; // notified at all (device known or not)
+  final Set<String> _knownNotified =
+      {}; // already sent the Approve/Decline variant
+  bool _firstLoad = true;
 
   @override
   void initState() {
@@ -2167,373 +2703,75 @@ class _PendingDevicePanelState extends State<_PendingDevicePanel> {
           .get(Uri.parse(ApiConstants.pendingVendorDevicesEndpoint))
           .timeout(const Duration(seconds: 8));
       if (!mounted) return;
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body) as Map<String, dynamic>;
-        final newList =
-            List<Map<String, dynamic>>.from(data['pending'] ?? []);
-        // Fire an actionable OS notification for newly detected pending
-        // devices — admin can Approve/Decline before it ever reaches the
-        // gateway, without needing to open this panel. Fired twice per
-        // session: once the instant the vendor knocks (Decline-only, the
-        // device isn't known yet), and again the instant their laptop is
-        // actually paired via QR (now with Approve too) — re-checked on
-        // device identity, not on first sight, so the second notification
-        // doesn't go missing in the dedup.
-        if (newList.isNotEmpty) {
-          final adminUsername = await AuthService.getUsername() ?? 'admin';
-          for (final device in newList) {
-            final token = device['qr_token'] as String? ?? '';
-            if (token.isEmpty) continue;
-            final deviceIp = device['pending_device_ip'] as String? ?? '';
-            final isFirstSight = !_seenTokens.contains(token);
-            final justPaired = deviceIp.isNotEmpty && !_knownNotified.contains(token);
-            if (isFirstSight || justPaired) {
-              _seenTokens.add(token);
-              if (deviceIp.isNotEmpty) _knownNotified.add(token);
-              NotificationService.showVendorDeviceAlert(
-                vendorName: device['vendor_username'] as String? ?? '',
-                company: device['company_name'] as String? ?? '',
-                deviceIp: deviceIp,
-                deviceMac: device['pending_device_mac'] as String? ?? '',
-                tokenHash: token,
-                adminUsername: adminUsername,
-              );
-            }
-          }
+      if (res.statusCode != 200) return;
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final newList = List<Map<String, dynamic>>.from(data['pending'] ?? []);
+
+      if (_firstLoad) {
+        // Baseline whatever's already pending from before this app launch
+        // — otherwise any leftover request (or a backend that's slow to
+        // mark something expired) re-fires a notification on every single
+        // login instead of only for genuinely new ones.
+        for (final device in newList) {
+          final token = device['qr_token'] as String? ?? '';
+          if (token.isEmpty) continue;
+          _seenTokens.add(token);
+          final deviceIp = device['pending_device_ip'] as String? ?? '';
+          if (deviceIp.isNotEmpty) _knownNotified.add(token);
         }
-        setState(() => _pending = newList);
+        _firstLoad = false;
+        return;
+      }
+
+      if (newList.isEmpty) return;
+
+      // Fire an actionable OS notification for newly detected pending
+      // devices. Fired twice per session: once the instant the vendor
+      // knocks (Decline-only, the device isn't known yet), and again the
+      // instant their laptop is actually paired via QR (now with Approve
+      // too) — re-checked on device identity, not on first sight, so the
+      // second notification doesn't go missing in the dedup.
+      final adminUsername = await AuthService.getUsername() ?? 'admin';
+      for (final device in newList) {
+        final token = device['qr_token'] as String? ?? '';
+        if (token.isEmpty) continue;
+        final deviceIp = device['pending_device_ip'] as String? ?? '';
+        final isFirstSight = !_seenTokens.contains(token);
+        final justPaired =
+            deviceIp.isNotEmpty && !_knownNotified.contains(token);
+        if (isFirstSight || justPaired) {
+          _seenTokens.add(token);
+          if (deviceIp.isNotEmpty) _knownNotified.add(token);
+          NotificationService.showVendorDeviceAlert(
+            vendorName: device['vendor_username'] as String? ?? '',
+            company: device['company_name'] as String? ?? '',
+            deviceIp: deviceIp,
+            deviceMac: device['pending_device_mac'] as String? ?? '',
+            tokenHash: token,
+            adminUsername: adminUsername,
+          );
+        }
       }
     } catch (_) {}
   }
 
-  Future<void> _action(String tokenHash, bool approved,
-      [String? overrideIp, String? overrideMac]) async {
-    final username = await AuthService.getUsername() ?? 'admin';
-    try {
-      final body = <String, dynamic>{
-        'token_hash':     tokenHash,
-        'admin_username': username,
-        'approved':       approved,
-      };
-      if (overrideIp  != null) body['override_ip']  = overrideIp;
-      if (overrideMac != null) body['override_mac'] = overrideMac;
-      await http
-          .post(
-            Uri.parse(ApiConstants.approveVendorDeviceEndpoint),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(body),
-          )
-          .timeout(const Duration(seconds: 10));
-    } catch (_) {}
-    await _fetch();
-  }
-
   @override
-  Widget build(BuildContext context) {
-    if (_pending.isEmpty) return const SizedBox.shrink();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          children: [
-            _PulsingDot(color: const Color(0xFFF59E0B)),
-            const SizedBox(width: 8),
-            const Text(
-              'DEVICE APPROVAL REQUIRED',
-              style: TextStyle(
-                color: Color(0xFFF59E0B),
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.5,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        for (final device in _pending) ...[
-          _PendingDeviceCard(
-            vendorName: device['vendor_username'] as String? ?? '—',
-            company: device['company_name'] as String? ?? '—',
-            deviceIp: device['pending_device_ip'] as String? ?? '—',
-            deviceMac: device['pending_device_mac'] as String? ?? '—',
-            tokenHash: device['qr_token'] as String? ?? '',
-            onAction: _action,
-          ),
-          const SizedBox(height: 10),
-        ],
-        const SizedBox(height: 4),
-      ],
-    );
-  }
-}
-
-class _PendingDeviceCard extends StatefulWidget {
-  final String vendorName;
-  final String company;
-  final String deviceIp;
-  final String deviceMac;
-  final String tokenHash;
-  final Future<void> Function(String token, bool approved,
-      [String? overrideIp, String? overrideMac]) onAction;
-
-  const _PendingDeviceCard({
-    required this.vendorName,
-    required this.company,
-    required this.deviceIp,
-    required this.deviceMac,
-    required this.tokenHash,
-    required this.onAction,
-  });
-
-  @override
-  State<_PendingDeviceCard> createState() => _PendingDeviceCardState();
-}
-
-class _PendingDeviceCardState extends State<_PendingDeviceCard> {
-  bool _processing = false;
-
-  // Device identity now comes exclusively from the vendor scanning their
-  // laptop's QR (proven self-report tied to their session token) — there is
-  // no admin-side network scan or override anymore.
-  bool get _hasDevice => widget.deviceIp.isNotEmpty && widget.deviceIp != '—';
-
-  Future<void> _handle(bool approved) async {
-    setState(() => _processing = true);
-    await widget.onAction(widget.tokenHash, approved, null, null);
-    if (mounted) setState(() => _processing = false);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: double.infinity,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        gradient: const LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [Color(0xFF0D1421), Color(0xFF0A0F1A)],
-        ),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(
-          color: const Color(0xFF00C3FF).withValues(alpha: 0.25),
-          width: 1,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF00C3FF).withValues(alpha: 0.06),
-            blurRadius: 24,
-            spreadRadius: -2,
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // Header: vendor info + pulsing dot
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF00C3FF).withValues(alpha: 0.10),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: const Color(0xFF00C3FF).withValues(alpha: 0.3),
-                    width: 0.8,
-                  ),
-                ),
-                child: const Icon(
-                  Icons.devices_other_rounded,
-                  color: Color(0xFF00C3FF),
-                  size: 16,
-                ),
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      widget.vendorName,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w700,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                    const SizedBox(height: 1),
-                    Text(
-                      widget.company,
-                      style: const TextStyle(
-                        color: Color(0xFF94A3B8),
-                        fontSize: 11,
-                      ),
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                ),
-              ),
-              _PulsingDot(color: const Color(0xFFF59E0B)),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              _DeviceInfoChip(label: 'IP',  value: widget.deviceIp),
-              const SizedBox(width: 8),
-              Expanded(
-                child: _DeviceInfoChip(label: 'MAC', value: widget.deviceMac),
-              ),
-            ],
-          ),
-          if (!_hasDevice)
-            const Padding(
-              padding: EdgeInsets.only(top: 8),
-              child: Text(
-                'AWAITING LAPTOP PAIRING — VENDOR MUST SCAN QR ON THEIR DEVICE',
-                style: TextStyle(
-                  color: Color(0xFFF59E0B),
-                  fontSize: 9,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.6,
-                ),
-              ),
-            ),
-          const SizedBox(height: 14),
-          // Deny / Approve buttons
-          _processing
-              ? const Center(
-                  child: SizedBox(
-                    height: 20,
-                    width: 20,
-                    child: CircularProgressIndicator(
-                      strokeWidth: 1.5,
-                      valueColor: AlwaysStoppedAnimation<Color>(
-                          Color(0xFF00C3FF)),
-                    ),
-                  ),
-                )
-              : Row(
-                  children: [
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: () => _handle(false),
-                        child: Container(
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: const Color(0xFFEF4444).withValues(alpha: 0.08),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: const Color(0xFFEF4444).withValues(alpha: 0.40),
-                            ),
-                          ),
-                          child: const Center(
-                            child: Text(
-                              'DENY',
-                              style: TextStyle(
-                                color: Color(0xFFEF4444),
-                                fontSize: 11,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 2.0,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: GestureDetector(
-                        onTap: _hasDevice ? () => _handle(true) : null,
-                        child: Container(
-                          height: 40,
-                          decoration: BoxDecoration(
-                            color: (_hasDevice ? const Color(0xFF10B981) : const Color(0xFF475569))
-                                .withValues(alpha: 0.10),
-                            borderRadius: BorderRadius.circular(10),
-                            border: Border.all(
-                              color: (_hasDevice ? const Color(0xFF10B981) : const Color(0xFF475569))
-                                  .withValues(alpha: 0.45),
-                            ),
-                          ),
-                          child: Center(
-                            child: Text(
-                              'APPROVE',
-                              style: TextStyle(
-                                color: _hasDevice ? const Color(0xFF10B981) : const Color(0xFF475569),
-                                fontSize: 11,
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: 2.0,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// RECENT VENDOR ATTEMPTS — successes AND failures together, so a denied
-// knock or a revoked device isn't invisible just because it didn't lead
-// anywhere.
+// VENDOR ATTEMPTS WATCHER — same idea as above: successes and denials are
+// reported purely through OS popup notifications, not an inline feed.
 // ─────────────────────────────────────────────────────────────────────────────
-class _AttemptStyle {
-  final String label;
-  final Color color;
-  final IconData icon;
-  const _AttemptStyle(this.label, this.color, this.icon);
-}
-
-_AttemptStyle _attemptStyle(String eventType, String status) {
-  const cyan  = Color(0xFF00C3FF);
-  const green = Color(0xFF10B981);
-  const red   = Color(0xFFEF4444);
-  const amber = Color(0xFFF59E0B);
-
-  if (eventType == 'VENDOR_DEVICE' && status == 'APPROVED') {
-    return const _AttemptStyle('Device connected', green, Icons.check_circle_rounded);
-  }
-  if (eventType == 'VENDOR_DEVICE_REVOKED') {
-    return const _AttemptStyle('Access revoked', red, Icons.block_rounded);
-  }
-  if (eventType == 'DEVICE_PAIRED') {
-    return const _AttemptStyle('Laptop paired via QR', cyan, Icons.qr_code_rounded);
-  }
-  if (eventType == 'DEVICE_APPROVAL') {
-    return status == 'APPROVED'
-        ? const _AttemptStyle('Admin approved device', green, Icons.verified_rounded)
-        : const _AttemptStyle('Admin denied device', red, Icons.cancel_rounded);
-  }
-  if (eventType == 'LAPTOP_EXPIRED') {
-    return const _AttemptStyle('Session expired', amber, Icons.timer_off_rounded);
-  }
-  if (eventType == 'VENDOR_KNOCK' || eventType == 'VENDOR_KNOCK_SPA') {
-    if (status.startsWith('DENIED')) {
-      return const _AttemptStyle('Knock denied', red, Icons.do_not_disturb_on_rounded);
-    }
-    return const _AttemptStyle('Tunnel authorised', cyan, Icons.sensors_rounded);
-  }
-  return _AttemptStyle(eventType, const Color(0xFF94A3B8), Icons.info_outline_rounded);
-}
-
-class _VendorAttemptsPanel extends StatefulWidget {
-  const _VendorAttemptsPanel();
+class _VendorAttemptsWatcher extends StatefulWidget {
+  const _VendorAttemptsWatcher();
 
   @override
-  State<_VendorAttemptsPanel> createState() => _VendorAttemptsPanelState();
+  State<_VendorAttemptsWatcher> createState() => _VendorAttemptsWatcherState();
 }
 
-class _VendorAttemptsPanelState extends State<_VendorAttemptsPanel> {
+class _VendorAttemptsWatcherState extends State<_VendorAttemptsWatcher> {
   Timer? _timer;
-  List<Map<String, dynamic>> _attempts = [];
   final Set<int> _seenIds = {};
   bool _firstLoad = true;
 
@@ -2557,181 +2795,50 @@ class _VendorAttemptsPanelState extends State<_VendorAttemptsPanel> {
           .get(Uri.parse(ApiConstants.vendorAttemptsEndpoint))
           .timeout(const Duration(seconds: 8));
       if (!mounted) return;
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body) as Map<String, dynamic>;
-        final list = List<Map<String, dynamic>>.from(data['attempts'] ?? []);
+      if (res.statusCode != 200) return;
+      final data = jsonDecode(res.body) as Map<String, dynamic>;
+      final list = List<Map<String, dynamic>>.from(data['attempts'] ?? []);
 
-        // Notify only for new, meaningful transitions — not on first load
-        // (that would replay the entire history as notifications) and not
-        // for every knock/grant noise, just connects and denials/revokes.
-        if (!_firstLoad) {
-          for (final a in list) {
-            final id = a['id'] as int? ?? -1;
-            if (id < 0 || _seenIds.contains(id)) continue;
-            _seenIds.add(id);
-            final eventType = a['event_type'] as String? ?? '';
-            final status    = a['status']     as String? ?? '';
-            final username  = a['username']   as String? ?? '';
-            final ip        = a['client_ip']  as String? ?? '';
-            final mac        = a['mac']        as String? ?? '';
-            if (eventType == 'VENDOR_DEVICE' && status == 'APPROVED') {
-              NotificationService.showVendorConnectedAlert(
-                  vendorName: username, ip: ip, mac: mac);
-            } else if ((eventType == 'VENDOR_KNOCK' ||
-                    eventType == 'VENDOR_KNOCK_SPA') &&
-                status.startsWith('DENIED')) {
-              NotificationService.showVendorFailedAlert(
-                  vendorName: username, reason: status);
-            }
-          }
-        } else {
-          for (final a in list) {
-            final id = a['id'] as int?;
-            if (id != null) _seenIds.add(id);
+      // Notify only for new, meaningful transitions — not on first load
+      // (that would replay the entire history as notifications) and not
+      // for every knock/grant noise, just connects and denials/revokes.
+      if (!_firstLoad) {
+        for (final a in list) {
+          final id = a['id'] as int? ?? -1;
+          if (id < 0 || _seenIds.contains(id)) continue;
+          _seenIds.add(id);
+          final eventType = a['event_type'] as String? ?? '';
+          final status = a['status'] as String? ?? '';
+          final username = a['username'] as String? ?? '';
+          final ip = a['client_ip'] as String? ?? '';
+          final mac = a['mac'] as String? ?? '';
+          if (eventType == 'VENDOR_DEVICE' && status == 'APPROVED') {
+            NotificationService.showVendorConnectedAlert(
+              vendorName: username,
+              ip: ip,
+              mac: mac,
+            );
+          } else if ((eventType == 'VENDOR_KNOCK' ||
+                  eventType == 'VENDOR_KNOCK_SPA') &&
+              status.startsWith('DENIED')) {
+            NotificationService.showVendorFailedAlert(
+              vendorName: username,
+              reason: status,
+            );
           }
         }
-
-        setState(() {
-          _attempts  = list;
-          _firstLoad = false;
-        });
+      } else {
+        for (final a in list) {
+          final id = a['id'] as int?;
+          if (id != null) _seenIds.add(id);
+        }
       }
+      _firstLoad = false;
     } catch (_) {}
   }
 
   @override
-  Widget build(BuildContext context) {
-    if (_attempts.isEmpty) return const SizedBox.shrink();
-    return Container(
-      width: double.infinity,
-      margin: const EdgeInsets.only(bottom: 14),
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0A0F1A),
-        borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'RECENT ACTIVITY',
-            style: TextStyle(
-              color: Color(0xFF94A3B8),
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 1.5,
-            ),
-          ),
-          const SizedBox(height: 10),
-          for (final a in _attempts.take(8)) _AttemptRow(attempt: a),
-        ],
-      ),
-    );
-  }
-}
-
-class _AttemptRow extends StatelessWidget {
-  final Map<String, dynamic> attempt;
-  const _AttemptRow({required this.attempt});
-
-  @override
-  Widget build(BuildContext context) {
-    final eventType = attempt['event_type'] as String? ?? '';
-    final status    = attempt['status']     as String? ?? '';
-    final username  = attempt['username']   as String? ?? '—';
-    final ip        = attempt['client_ip']  as String? ?? '';
-    final style = _attemptStyle(eventType, status);
-
-    String timeLabel = '';
-    try {
-      final dt = DateTime.parse(attempt['created_at'] as String).toLocal();
-      timeLabel =
-          '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-    } catch (_) {}
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 6),
-      child: Row(
-        children: [
-          Icon(style.icon, color: style.color, size: 15),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '$username — ${style.label}',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                  ),
-                  overflow: TextOverflow.ellipsis,
-                ),
-                if (ip.isNotEmpty)
-                  Text(
-                    ip,
-                    style: const TextStyle(
-                      color: Color(0xFF475569),
-                      fontSize: 10,
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          Text(
-            timeLabel,
-            style: const TextStyle(color: Color(0xFF475569), fontSize: 10),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _DeviceInfoChip extends StatelessWidget {
-  final String label;
-  final String value;
-
-  const _DeviceInfoChip({required this.label, required this.value});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      decoration: BoxDecoration(
-        color: const Color(0xFF0D1421),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(
-          color: Colors.orangeAccent.withValues(alpha: 0.18),
-        ),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            '$label  ',
-            style: const TextStyle(
-              color: Color(0xFF64748B),
-              fontSize: 9,
-              fontWeight: FontWeight.w600,
-              letterSpacing: 1.0,
-            ),
-          ),
-          Text(
-            value,
-            style: const TextStyle(
-              color: Colors.white,
-              fontSize: 10,
-              fontWeight: FontWeight.w700,
-              letterSpacing: 0.5,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

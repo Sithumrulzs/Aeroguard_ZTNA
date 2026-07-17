@@ -29,6 +29,10 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
   // (e.g. locked out, unrecognised) from BiometricService.describeResult().
   String?     _statusDetail;
 
+  bool _autoTriggerScheduled = false;
+  Animation<double>? _routeAnimation;
+  void Function(AnimationStatus)? _routeAnimationListener;
+
   @override
   void initState() {
     super.initState();
@@ -45,11 +49,54 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
     _pulseOpacity = Tween<double>(begin: 0.3, end: 0.85).animate(
         CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut));
 
-    Future.delayed(const Duration(milliseconds: 600), _checkAndTrigger);
+    // Auto-trigger scheduling moved to didChangeDependencies — see there
+    // for why a fixed delay isn't used.
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_autoTriggerScheduled) return;
+    _autoTriggerScheduled = true;
+
+    // Android's BiometricPrompt is documented as unreliable if shown while
+    // the hosting route is still mid-transition — this screen is reached
+    // via bootToAuthRoute, whose transition takes 950ms, but the previous
+    // fixed 600ms delay fired 350ms before that animation even finished.
+    // That's exactly a "sometimes works, sometimes doesn't" bug: whether
+    // the transition happened to already be done by 600ms depended on
+    // device speed. Wait for the actual transition to complete instead of
+    // guessing a number tied to another file's constant.
+    final animation = ModalRoute.of(context)?.animation;
+    if (animation == null || animation.status == AnimationStatus.completed) {
+      _scheduleAutoTrigger();
+      return;
+    }
+    _routeAnimation = animation;
+    _routeAnimationListener = (status) {
+      if (status == AnimationStatus.completed) {
+        _routeAnimation?.removeStatusListener(_routeAnimationListener!);
+        _scheduleAutoTrigger();
+      }
+    };
+    animation.addStatusListener(_routeAnimationListener!);
+  }
+
+  void _scheduleAutoTrigger() {
+    // Small buffer past the transition's own completion — some devices
+    // still need a moment to settle native window focus even after
+    // Flutter's animation reports done, before BiometricPrompt can
+    // reliably attach.
+    Future.delayed(const Duration(milliseconds: 150), () {
+      if (mounted) _checkAndTrigger();
+    });
   }
 
   @override
   void dispose() {
+    if (_routeAnimation != null && _routeAnimationListener != null) {
+      _routeAnimation!.removeStatusListener(_routeAnimationListener!);
+    }
     _pulseCtrl.dispose();
     _glowCtrl.dispose();
     super.dispose();
@@ -89,7 +136,7 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
     });
 
     final result = await BiometricService.authenticate(
-      reason: 'AeroGuard ZTNA: Verify your identity to access the datacenter gateway.',
+      reason: 'Verify your identity',
     );
     if (!mounted) return;
 

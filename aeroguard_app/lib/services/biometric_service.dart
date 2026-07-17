@@ -1,6 +1,7 @@
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:local_auth/local_auth.dart';
+import 'package:local_auth_android/local_auth_android.dart';
 
 /// Detailed result returned by [BiometricService.authenticate].
 /// Gives the UI enough information to surface actionable copy without the
@@ -62,7 +63,7 @@ class BiometricService {
       // Pre-flight: hardware capability
       final bool hasHardware = await _auth.isDeviceSupported();
       final bool canCheck    = await _auth.canCheckBiometrics;
-      if (!hasHardware && !canCheck) {
+      if (!hasHardware || !canCheck) {
         debugPrint('[-] Biometric: hardware absent or policy-disabled.');
         return BiometricAuthResult.notAvailable;
       }
@@ -76,6 +77,12 @@ class BiometricService {
 
       final bool didAuth = await _auth.authenticate(
         localizedReason: reason,
+        // Android's dialog shows biometricHint as a subtitle above the
+        // reason text; it defaults to "Verify identity", which duplicates
+        // our own reason string on screen. Blank it so only one shows.
+        authMessages: const <AuthMessages>[
+          AndroidAuthMessages(biometricHint: ''),
+        ],
         options: const AuthenticationOptions(
           biometricOnly:   true,
           // stickyAuth keeps the system dialog alive when the user briefly

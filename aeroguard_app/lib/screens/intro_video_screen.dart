@@ -15,8 +15,7 @@ import 'home_load_page.dart';
 // safety margin against video_player's position/duration edge cases, not
 // as a color-correction trim. At this position the screen cuts straight to
 // HomeLoadPage with zero fade of our own, so its reveal lands in the very
-// same instant. The transition accent itself is triggered separately, by
-// HomeLoadPage, right as it mounts — see that screen's initState.
+// same instant.
 const int _videoCutoffMs = 6500;
 // Tapping to skip *before* that position jumps from an arbitrary, likely
 // colorful video frame rather than the matching dark ending — that jump

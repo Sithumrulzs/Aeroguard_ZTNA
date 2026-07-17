@@ -280,8 +280,8 @@ class _KnockHistoryTabState extends State<KnockHistoryTab> {
   }
 }
 
-// Colombo local day, matching the timezone convention already used by
-// LiveTelemetryPanel elsewhere in this dashboard.
+// Colombo local day, matching the timezone convention used elsewhere in
+// this dashboard.
 String _dayLabel(String? isoUtc) {
   if (isoUtc == null) return 'UNKNOWN';
   try {

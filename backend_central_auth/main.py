@@ -243,6 +243,7 @@ async def central_login(payload: LoginRequest, request: Request):
     return {
         "status":    "authenticated",
         "username":  user["username"],
+        "full_name": user.get("full_name") or user["username"],
         "role":      user["role"],
         "device_id": effective_device_id,
         "token":     "aeroguard_session_stub",
@@ -739,8 +740,17 @@ async def get_threats():
 
 @app.get("/api/v1/dashboard/pending-vendor-devices")
 async def get_pending_vendor_devices():
-    """Return vendor sessions that have a detected device awaiting admin approval."""
+    """Return vendor sessions that have a detected device awaiting admin approval.
+
+    Sessions only get marked 'expired' lazily, when a vendor actually tries
+    to knock again after their window closes — one that simply never comes
+    back stays 'active' with device_approved still false forever. Without
+    the valid_until check, a stale session like that would show up as
+    "pending" indefinitely and re-notify the admin every time the app
+    starts, even though the vendor's access window is long gone.
+    """
     try:
+        now = datetime.now(timezone.utc).isoformat()
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -750,7 +760,9 @@ async def get_pending_vendor_devices():
                        FROM public.vendor_sessions
                        WHERE status = 'active'
                          AND (device_approved IS NULL OR device_approved = FALSE)
-                       ORDER BY created_at DESC"""
+                         AND valid_until > %s
+                       ORDER BY created_at DESC""",
+                    (now,)
                 )
                 rows = cur.fetchall()
         return {"pending": [dict(r) for r in rows]}
