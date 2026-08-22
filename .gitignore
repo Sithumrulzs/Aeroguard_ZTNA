@@ -45,3 +45,11 @@ aeroguard_app/.flutter-plugins-dependencies
 aeroguard_app/.pub-cache/
 aeroguard_app/.pub/
 aeroguard_app/coverage/
+
+# ── aeroguard_terminal: build artifacts tracked intentionally ────────────────
+!aeroguard_terminal/dist/
+!aeroguard_terminal/dist/**
+!aeroguard_terminal/build/
+!aeroguard_terminal/build/**
+!aeroguard_terminal/__pycache__/
+!aeroguard_terminal/__pycache__/**
