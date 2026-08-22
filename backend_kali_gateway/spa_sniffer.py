@@ -516,32 +516,50 @@ def _on_packet(pkt):
 
 # ── Vendor session revocation watcher ────────────────────────────────────────
 def _revocation_watcher():
-    """Poll DB every 20s for vendor sessions manually revoked by admin.
+    """Poll DB every 20s for vendor sessions manually revoked/expired by admin.
     Cancels the session timer and removes iptables + conntrack rules immediately
-    so access is cut before the natural expiry timer fires."""
+    so access is cut before the natural expiry timer fires.
+
+    The laptop side is reconciled against vendor_sessions.pending_device_ip
+    (persisted in the DB) rather than only the in-memory _vendor_laptop_map —
+    that map lives purely in this process's memory, so if spa_sniffer.py was
+    ever restarted after a laptop was granted access (crash, VM reboot,
+    service restart), the map is empty and the old approach would silently
+    never tear that grant down again even though the DB correctly shows
+    'revoked'. Bounded to sessions revoked/expired within the last 24h so
+    this doesn't grow into an unbounded full-table scan over time.
+    """
     while True:
         time.sleep(20)
-        if not _vendor_phone_map:
-            continue
         try:
-            tokens = list(_vendor_phone_map.keys())
             with get_db() as conn:
                 with conn.cursor() as cur:
+                    revoked_laptops = []
                     cur.execute(
-                        """SELECT qr_token, vendor_username FROM public.vendor_sessions
+                        """SELECT qr_token, vendor_username, pending_device_ip
+                           FROM public.vendor_sessions
                            WHERE status IN ('revoked', 'expired')
-                             AND qr_token = ANY(%s)""",
-                        (tokens,)
+                             AND pending_device_ip IS NOT NULL
+                             AND valid_until > NOW() - INTERVAL '24 hours'"""
                     )
-                    revoked = {r["qr_token"]: r["vendor_username"] for r in cur.fetchall()}
+                    revoked_laptops = cur.fetchall()
+
+                    revoked_phones = {}
+                    tokens = list(_vendor_phone_map.keys())
+                    if tokens:
+                        cur.execute(
+                            """SELECT qr_token, vendor_username FROM public.vendor_sessions
+                               WHERE status IN ('revoked', 'expired')
+                                 AND qr_token = ANY(%s)""",
+                            (tokens,)
+                        )
+                        revoked_phones = {r["qr_token"]: r["vendor_username"] for r in cur.fetchall()}
         except Exception as e:
             print(f"[-] Revocation watcher DB error: {e}")
             continue
 
-        for token, vendor_name in revoked.items():
-            phone_ip  = _vendor_phone_map.pop(token, None)
-            laptop_ip = _vendor_laptop_map.pop(token, None)
-
+        for token, vendor_name in revoked_phones.items():
+            phone_ip = _vendor_phone_map.pop(token, None)
             if phone_ip and phone_ip in _active_phones:
                 with _lock:
                     t = _timers.pop(phone_ip, None)
@@ -550,12 +568,17 @@ def _revocation_watcher():
                 _remove(phone_ip)
                 print(f"[!] VENDOR REVOKED  phone {phone_ip} — admin cut access")
 
-            if laptop_ip and laptop_ip in _active_laptops:
-                with _lock:
-                    t = _timers.pop(f"laptop:{laptop_ip}", None)
-                    if t:
-                        t.cancel()
-                _remove_laptop(laptop_ip)
+        for row in revoked_laptops:
+            token, vendor_name, laptop_ip = (
+                row["qr_token"], row["vendor_username"], row["pending_device_ip"])
+            _vendor_laptop_map.pop(token, None)
+            still_tracked = laptop_ip in _active_laptops
+            with _lock:
+                t = _timers.pop(f"laptop:{laptop_ip}", None)
+                if t:
+                    t.cancel()
+            _remove_laptop(laptop_ip)
+            if still_tracked:
                 _log("VENDOR_DEVICE_REVOKED", vendor_name, "REVOKED", laptop_ip,
                      {"token": token[:12] + "..."})
                 print(f"[!] VENDOR REVOKED  laptop {laptop_ip} — admin cut access")

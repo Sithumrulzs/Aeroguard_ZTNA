@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, func
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, func
 try:
     from database.db_core import Base       # when run from backend_kali_gateway/
 except ImportError:
@@ -30,3 +30,6 @@ class VendorSession(Base):
     status          = Column(String, default="pending")  # pending / active / expired
     valid_until     = Column(String)
     created_at      = Column(DateTime, default=func.now())
+    last_seen_lat   = Column(Float)
+    last_seen_lng   = Column(Float)
+    last_seen_at    = Column(DateTime)
