@@ -1,42 +1,5 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:http/http.dart' as http;
-import '../config/api_constants.dart';
-
-/// Handles the "Approve" / "Decline" taps on a vendor device notification —
-/// works whether the app is foregrounded, backgrounded, or the notification
-/// is acted on without ever opening the app at all.
-@pragma('vm:entry-point')
-Future<void> notificationTapBackground(NotificationResponse response) async {
-  await _handleVendorDeviceAction(response);
-}
-
-// Must be awaited all the way through — a background isolate can be torn
-// down the instant this function returns, so a fire-and-forget HTTP call
-// here would frequently never actually reach the network.
-Future<void> _handleVendorDeviceAction(NotificationResponse response) async {
-  if (response.actionId != 'approve' && response.actionId != 'decline') {
-    return; // body tap, not an action button — let the app open normally
-  }
-  if (response.payload == null) return;
-  try {
-    final data = jsonDecode(response.payload!) as Map<String, dynamic>;
-    final tokenHash = data['token_hash'] as String? ?? '';
-    if (tokenHash.isEmpty) return;
-    await http
-        .post(
-          Uri.parse(ApiConstants.approveVendorDeviceEndpoint),
-          headers: {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'token_hash':     tokenHash,
-            'admin_username': data['admin_username'] as String? ?? 'admin',
-            'approved':       response.actionId == 'approve',
-          }),
-        )
-        .timeout(const Duration(seconds: 10));
-  } catch (_) {}
-}
 
 class NotificationService {
   static final FlutterLocalNotificationsPlugin _plugin =
@@ -49,33 +12,31 @@ class NotificationService {
         AndroidInitializationSettings('@mipmap/ic_launcher');
     const InitializationSettings settings =
         InitializationSettings(android: android);
-    await _plugin.initialize(
-      settings,
-      onDidReceiveNotificationResponse: _handleVendorDeviceAction,
-      onDidReceiveBackgroundNotificationResponse: notificationTapBackground,
-    );
+    await _plugin.initialize(settings);
     final androidPlugin = _plugin.resolvePlatformSpecificImplementation<
         AndroidFlutterLocalNotificationsPlugin>();
     await androidPlugin?.requestNotificationsPermission();
     _initialized = true;
   }
 
-  /// Fires the moment a vendor knocks. Always shows the vendor's details
-  /// and device IP/MAC (pending placeholder until the laptop is paired),
-  /// with both Approve and Decline beneath — approving before a device is
-  /// actually paired is harmlessly rejected server-side, so there's no
-  /// need to hide the button while waiting.
+  /// Fires once a vendor's laptop is actually paired via QR — purely an
+  /// alert that something needs the admin's attention. Approve/Decline
+  /// happen from the reliable in-app card on the dashboard, not from
+  /// notification action buttons: those proved unreliable in testing (a
+  /// tap aimed at "Approve" registered in adb logcat as a plain
+  /// SELECT_NOTIFICATION body-open rather than the action-specific
+  /// intent — the OS peek/collapsed notification view on some Android
+  /// builds doesn't seem to route touches to action buttons correctly).
+  /// Tapping this notification just opens the app, which does work
+  /// reliably, landing the admin on the dashboard where the card lives.
   static Future<void> showVendorDeviceAlert({
     required String vendorName,
     required String company,
     required String deviceIp,
     required String deviceMac,
-    required String tokenHash,
-    required String adminUsername,
   }) async {
     await init();
-    const AndroidNotificationDetails androidDetails =
-        AndroidNotificationDetails(
+    const androidDetails = AndroidNotificationDetails(
       'aeroguard_alerts',
       'AeroGuard Security Alerts',
       channelDescription: 'Vendor device approval requests',
@@ -84,28 +45,25 @@ class NotificationService {
       color: Color(0xFF00C3FF),
       enableVibration: true,
       playSound: true,
-      actions: [
-        AndroidNotificationAction('approve', 'Approve',
-            showsUserInterface: false, cancelNotification: true),
-        AndroidNotificationAction('decline', 'Decline',
-            showsUserInterface: false, cancelNotification: true),
-      ],
     );
-    const NotificationDetails details =
-        NotificationDetails(android: androidDetails);
     final body = '$vendorName ($company)\n'
-        'IP: ${deviceIp.isNotEmpty ? deviceIp : "Pending..."}   '
-        'MAC: ${deviceMac.isNotEmpty ? deviceMac : "Pending..."}';
+        'IP: $deviceIp   MAC: ${deviceMac.isNotEmpty ? deviceMac : "—"}\n'
+        'Open the app to approve or decline.';
     await _plugin.show(
       vendorName.hashCode,
       'Device Access Request',
       body,
-      details,
-      payload: jsonEncode({
-        'token_hash':     tokenHash,
-        'admin_username': adminUsername,
-      }),
+      const NotificationDetails(android: androidDetails),
     );
+  }
+
+  /// Clears a device-request alert once it's been handled (approved,
+  /// declined, or the pending record disappeared entirely — e.g. expired)
+  /// so a stale notification never sits in the shade pointing at a
+  /// request that's no longer actionable.
+  static Future<void> cancelVendorDeviceAlert(String vendorName) async {
+    await init();
+    await _plugin.cancel(vendorName.hashCode);
   }
 
   /// Purely informational — fires once a vendor's device is actually

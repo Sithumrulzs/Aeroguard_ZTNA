@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_svg/flutter_svg.dart';
+import '../config/theme.dart';
 import '../config/transitions.dart';
 import '../services/auth_service.dart';
 import '../services/biometric_service.dart';
@@ -15,8 +16,7 @@ class SignInPage extends StatefulWidget {
   State<SignInPage> createState() => _SignInPageState();
 }
 
-class _SignInPageState extends State<SignInPage>
-    with SingleTickerProviderStateMixin {
+class _SignInPageState extends State<SignInPage> {
   final TextEditingController _userCtrl = TextEditingController();
   final TextEditingController _passCtrl = TextEditingController();
   bool _isLoading   = false;
@@ -24,22 +24,9 @@ class _SignInPageState extends State<SignInPage>
   bool _obscure     = true;
   bool _biometricReady = false; // true when sensor available + creds saved
 
-  late AnimationController _fadeCtrl;
-  late Animation<double> _fadeAnim;
-  late Animation<Offset> _slideAnim;
-
   @override
   void initState() {
     super.initState();
-    _fadeCtrl = AnimationController(
-      duration: const Duration(milliseconds: 700),
-      vsync: this,
-    )..forward();
-    _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
-    _slideAnim = Tween<Offset>(
-      begin: const Offset(0, 0.04),
-      end: Offset.zero,
-    ).animate(CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOutCubic));
     _checkBiometricReadiness();
   }
 
@@ -55,7 +42,6 @@ class _SignInPageState extends State<SignInPage>
   void dispose() {
     _userCtrl.dispose();
     _passCtrl.dispose();
-    _fadeCtrl.dispose();
     super.dispose();
   }
 
@@ -209,36 +195,36 @@ class _SignInPageState extends State<SignInPage>
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0D1421),
+        backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
+        title: Row(
           children: [
-            Icon(Icons.fingerprint, color: Color(0xFF00C3FF), size: 22),
-            SizedBox(width: 10),
+            Icon(Icons.fingerprint, color: AppColors.brandBlue, size: 22),
+            const SizedBox(width: 10),
             Text(
               'Enable Biometric Login',
-              style: TextStyle(color: Colors.white, fontSize: 15),
+              style: TextStyle(color: AppColors.inkPrimary, fontSize: 15),
             ),
           ],
         ),
-        content: const Text(
+        content: Text(
           'Use your fingerprint to sign in automatically next time.',
-          style: TextStyle(color: Color(0xFFC0C7D4), fontSize: 13, height: 1.5),
+          style: TextStyle(color: AppColors.inkSecondary, fontSize: 13, height: 1.5),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text(
+            child: Text(
               'NOT NOW',
-              style: TextStyle(color: Color(0xFF475569), letterSpacing: 1.0),
+              style: TextStyle(color: AppColors.inkSecondary, letterSpacing: 1.0),
             ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
+            child: Text(
               'ENABLE',
               style: TextStyle(
-                color: Color(0xFF00C3FF),
+                color: AppColors.brandBlue,
                 fontWeight: FontWeight.w700,
                 letterSpacing: 1.0,
               ),
@@ -261,19 +247,19 @@ class _SignInPageState extends State<SignInPage>
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0D1421),
-        title: const Text(
+        backgroundColor: AppColors.surface,
+        title: Text(
           'Authentication Failed',
-          style: TextStyle(color: Colors.white),
+          style: TextStyle(color: AppColors.inkPrimary),
         ),
         content: Text(
           message,
-          style: const TextStyle(color: Color(0xFFC0C7D4)),
+          style: TextStyle(color: AppColors.inkSecondary),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK', style: TextStyle(color: Color(0xFF00C3FF))),
+            child: Text('OK', style: TextStyle(color: AppColors.brandBlue)),
           ),
         ],
       ),
@@ -283,24 +269,13 @@ class _SignInPageState extends State<SignInPage>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF050810),
-      body: Container(
+      backgroundColor: AppColors.surfaceMuted,
+      body: SizedBox(
         width: double.infinity,
         height: double.infinity,
-        decoration: const BoxDecoration(
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [Color(0xFF050810), Color(0xFF0A1628)],
-          ),
-        ),
         child: SafeArea(
           bottom: false,
-          child: FadeTransition(
-            opacity: _fadeAnim,
-            child: SlideTransition(
-              position: _slideAnim,
-              child: SingleChildScrollView(
+          child: SingleChildScrollView(
               padding: const EdgeInsets.symmetric(
                 horizontal: 28.0,
                 vertical: 48.0,
@@ -311,17 +286,11 @@ class _SignInPageState extends State<SignInPage>
                     Container(
                       height: 78,
                       width: 78,
+                      padding: const EdgeInsets.all(16),
                       decoration: BoxDecoration(
+                        color: AppColors.surface,
                         shape: BoxShape.circle,
-                        boxShadow: [
-                          BoxShadow(
-                            color: const Color(
-                              0xFF00C3FF,
-                            ).withValues(alpha: 0.18),
-                            blurRadius: 44,
-                            spreadRadius: 4,
-                          ),
-                        ],
+                        boxShadow: AppColors.softShadow(opacity: 0.14),
                       ),
                       child: SvgPicture.asset(
                         'assets/images/Colored Logo.svg',
@@ -329,23 +298,23 @@ class _SignInPageState extends State<SignInPage>
                       ),
                     ),
                     const SizedBox(height: 20),
-                    const Text(
+                    Text(
                       'AEROGUARD',
                       style: TextStyle(
-                        color: Colors.white,
+                        color: AppColors.inkPrimary,
                         fontSize: 22,
                         fontWeight: FontWeight.bold,
                         letterSpacing: 8.0,
                       ),
                     ),
                     const SizedBox(height: 6),
-                    const Text(
+                    Text(
                       'COMMAND ACCESS',
                       style: TextStyle(
-                        color: Color(0xFF475569),
+                        color: AppColors.brandBlue,
                         fontSize: 10,
                         letterSpacing: 4.0,
-                        fontWeight: FontWeight.w500,
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
 
@@ -355,19 +324,18 @@ class _SignInPageState extends State<SignInPage>
                     Container(
                       padding: const EdgeInsets.all(28),
                       decoration: BoxDecoration(
-                        color: const Color(0xFF0D1421),
+                        color: AppColors.surface,
                         borderRadius: BorderRadius.circular(24),
-                        border: Border.all(
-                          color: const Color(0xFF00C3FF).withValues(alpha: 0.1),
-                        ),
+                        border: Border.all(color: AppColors.border),
+                        boxShadow: AppColors.softShadow(),
                       ),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
+                          Text(
                             'AUTHENTICATE',
                             style: TextStyle(
-                              color: Color(0xFF475569),
+                              color: AppColors.inkSecondary,
                               fontSize: 10,
                               letterSpacing: 3.0,
                               fontWeight: FontWeight.w600,
@@ -411,31 +379,16 @@ class _SignInPageState extends State<SignInPage>
                               decoration: BoxDecoration(
                                 borderRadius: BorderRadius.circular(14),
                                 gradient: _isLoading
-                                    ? const LinearGradient(
+                                    ? LinearGradient(
                                         colors: [
-                                          Color(0xFF00A8DD),
-                                          Color(0xFF0044CC),
+                                          AppColors.brandBlue,
+                                          AppColors.brandBlueDark,
                                         ],
                                       )
-                                    : const LinearGradient(
-                                        begin: Alignment.topLeft,
-                                        end: Alignment.bottomRight,
-                                        colors: [
-                                          Color(0xFF00C3FF),
-                                          Color(0xFF0055FF),
-                                        ],
-                                      ),
+                                    : AppColors.blueButtonGradient,
                                 boxShadow: _isLoading
                                     ? null
-                                    : [
-                                        BoxShadow(
-                                          color: const Color(
-                                            0xFF00C3FF,
-                                          ).withValues(alpha: 0.28),
-                                          blurRadius: 20,
-                                          offset: const Offset(0, 6),
-                                        ),
-                                      ],
+                                    : AppColors.softShadow(opacity: 0.32),
                               ),
                               child: Center(
                                 child: _isLoading
@@ -443,14 +396,14 @@ class _SignInPageState extends State<SignInPage>
                                         height: 20,
                                         width: 20,
                                         child: CircularProgressIndicator(
-                                          color: Colors.black,
+                                          color: Colors.white,
                                           strokeWidth: 2,
                                         ),
                                       )
                                     : const Text(
                                         'AUTHORIZE',
                                         style: TextStyle(
-                                          color: Colors.black,
+                                          color: Colors.white,
                                           fontSize: 14,
                                           fontWeight: FontWeight.w800,
                                           letterSpacing: 3.0,
@@ -466,27 +419,19 @@ class _SignInPageState extends State<SignInPage>
                             const SizedBox(height: 16),
                             Row(
                               children: [
-                                Expanded(
-                                  child: Divider(
-                                    color: Colors.white.withValues(alpha: 0.07),
-                                  ),
-                                ),
+                                Expanded(child: Divider(color: AppColors.border)),
                                 Padding(
                                   padding: const EdgeInsets.symmetric(horizontal: 12),
                                   child: Text(
                                     'OR',
                                     style: TextStyle(
-                                      color: const Color(0xFF475569).withValues(alpha: 0.7),
+                                      color: AppColors.inkFaint,
                                       fontSize: 10,
                                       letterSpacing: 2.0,
                                     ),
                                   ),
                                 ),
-                                Expanded(
-                                  child: Divider(
-                                    color: Colors.white.withValues(alpha: 0.07),
-                                  ),
-                                ),
+                                Expanded(child: Divider(color: AppColors.border)),
                               ],
                             ),
                             const SizedBox(height: 16),
@@ -498,34 +443,34 @@ class _SignInPageState extends State<SignInPage>
                                 width: double.infinity,
                                 decoration: BoxDecoration(
                                   borderRadius: BorderRadius.circular(14),
-                                  color: const Color(0xFF00C3FF).withValues(alpha: 0.05),
+                                  color: AppColors.brandBlue.withValues(alpha: 0.06),
                                   border: Border.all(
-                                    color: const Color(0xFF00C3FF).withValues(alpha: 0.25),
+                                    color: AppColors.brandBlue.withValues(alpha: 0.35),
                                   ),
                                 ),
                                 child: Center(
                                   child: _isBioLoading
-                                      ? const SizedBox(
+                                      ? SizedBox(
                                           height: 20,
                                           width: 20,
                                           child: CircularProgressIndicator(
-                                            color: Color(0xFF00C3FF),
+                                            color: AppColors.brandBlue,
                                             strokeWidth: 2,
                                           ),
                                         )
-                                      : const Row(
+                                      : Row(
                                           mainAxisSize: MainAxisSize.min,
                                           children: [
                                             Icon(
                                               Icons.fingerprint,
-                                              color: Color(0xFF00C3FF),
+                                              color: AppColors.brandBlue,
                                               size: 22,
                                             ),
-                                            SizedBox(width: 10),
+                                            const SizedBox(width: 10),
                                             Text(
                                               'BIOMETRIC LOGIN',
                                               style: TextStyle(
-                                                color: Color(0xFF00C3FF),
+                                                color: AppColors.brandBlue,
                                                 fontSize: 13,
                                                 fontWeight: FontWeight.w700,
                                                 letterSpacing: 2.5,
@@ -556,24 +501,22 @@ class _SignInPageState extends State<SignInPage>
                         ),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(14),
-                          border: Border.all(
-                            color: Colors.orangeAccent.withValues(alpha: 0.2),
-                          ),
-                          color: Colors.orangeAccent.withValues(alpha: 0.03),
+                          border: Border.all(color: const Color(0xFFFDBA74)),
+                          color: const Color(0xFFFFF4E5),
                         ),
                         child: const Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
                             Icon(
                               Icons.qr_code_scanner,
-                              color: Colors.orangeAccent,
+                              color: Color(0xFFC2410C),
                               size: 16,
                             ),
                             SizedBox(width: 10),
                             Text(
                               'VENDOR ACCESS',
                               style: TextStyle(
-                                color: Colors.orangeAccent,
+                                color: Color(0xFFC2410C),
                                 fontSize: 12,
                                 letterSpacing: 2.0,
                                 fontWeight: FontWeight.w600,
@@ -589,8 +532,6 @@ class _SignInPageState extends State<SignInPage>
               ),
             ),
           ),
-        ),
-      ),
     );
   }
 
@@ -604,25 +545,25 @@ class _SignInPageState extends State<SignInPage>
     return TextField(
       controller: controller,
       obscureText: obscure,
-      style: const TextStyle(color: Colors.white, fontSize: 15),
+      style: TextStyle(color: AppColors.inkPrimary, fontSize: 15),
       decoration: InputDecoration(
         labelText: label,
-        labelStyle: const TextStyle(
-          color: Color(0xFF475569),
+        labelStyle: TextStyle(
+          color: AppColors.inkSecondary,
           fontSize: 13,
           letterSpacing: 0.3,
         ),
-        prefixIcon: Icon(icon, color: const Color(0xFF475569), size: 18),
+        prefixIcon: Icon(icon, color: AppColors.inkSecondary, size: 18),
         suffixIcon: suffix,
         filled: true,
-        fillColor: const Color(0xFF080E1A),
+        fillColor: AppColors.surfaceMuted,
         enabledBorder: OutlineInputBorder(
           borderRadius: BorderRadius.circular(12),
-          borderSide: BorderSide(color: Colors.white.withValues(alpha: 0.07)),
+          borderSide: BorderSide(color: AppColors.border),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(12),
-          borderSide: const BorderSide(color: Color(0xFF00C3FF), width: 1.5),
+          borderRadius: const BorderRadius.all(Radius.circular(12)),
+          borderSide: BorderSide(color: AppColors.brandBlue, width: 1.5),
         ),
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 16,

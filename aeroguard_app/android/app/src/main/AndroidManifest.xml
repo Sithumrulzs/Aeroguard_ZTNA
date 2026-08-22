@@ -42,6 +42,16 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- video_player's decoded frames never reach the screen under
+             Impeller on this device's Exynos-lineage hardware decoder —
+             confirmed live: MediaCodec/CCodec logs show the decoder running
+             correctly (buffers allocated, surface connected) while the
+             on-screen texture stays frozen on the first frame. Falling back
+             to the Skia renderer fixes it; this app has no rendering
+             complex enough to need Impeller's benefits. -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

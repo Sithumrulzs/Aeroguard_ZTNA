@@ -46,7 +46,11 @@ class _VendorScanLaptopScreenState extends State<VendorScanLaptopScreen> {
               'pairing_code': pairingCode,
             }),
           )
-          .timeout(const Duration(seconds: 10));
+          // The backend free-tier instance spins down after ~15 minutes
+          // idle; the next request has to cold-start it, which can take
+          // well past a short timeout and surface as a bogus "can't
+          // reach the server" even though the request is still in flight.
+          .timeout(const Duration(seconds: 45));
 
       if (!mounted) return;
       if (res.statusCode == 200) {
@@ -59,7 +63,7 @@ class _VendorScanLaptopScreenState extends State<VendorScanLaptopScreen> {
       } catch (_) {}
       _showError(body['detail']?.toString() ?? 'Pairing failed — try again.');
     } catch (_) {
-      _showError('Could not reach the server. Check your connection.');
+      _showError('Server is taking too long to respond — try scanning again.');
     }
     if (mounted) setState(() => _busy = false);
   }
@@ -100,7 +104,18 @@ class _VendorScanLaptopScreenState extends State<VendorScanLaptopScreen> {
             Container(
               color: Colors.black54,
               child: const Center(
-                child: CircularProgressIndicator(color: Colors.orangeAccent),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    CircularProgressIndicator(color: Colors.orangeAccent),
+                    SizedBox(height: 16),
+                    Text(
+                      'Connecting…\nthis can take up to a minute if the\nserver was idle.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white70, height: 1.4),
+                    ),
+                  ],
+                ),
               ),
             ),
           Positioned(

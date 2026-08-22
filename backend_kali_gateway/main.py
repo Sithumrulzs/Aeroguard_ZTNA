@@ -18,6 +18,8 @@ import logging
 import os
 import uvicorn
 
+from core.sso import mint_fids_sso_token
+
 
 class _HealthCheckLogFilter(logging.Filter):
     """The dashboard polls /health every ~12-20s from multiple widgets at
@@ -390,10 +392,16 @@ def terminal_session(request: Request):
         (row["event_type"] == "VENDOR_DEVICE" and row["status"] == "APPROVED")
     )
     if granted:
+        # Mint a fresh, short-lived SSO token every poll — the terminal only
+        # actually redeems one after a fresh grant (see its own SSO cache),
+        # but minting is cheap and this way there's never a stale token
+        # sitting around from a session that's since been revoked.
+        sso_token = mint_fids_sso_token(row["username"], client_ip)
         return {
-            "active":     True,
-            "username":   row["username"],
-            "granted_at": str(row["created_at"]),
+            "active":        True,
+            "username":      row["username"],
+            "granted_at":    str(row["created_at"]),
+            "fids_sso_token": sso_token,
         }
     return {"active": False}
 

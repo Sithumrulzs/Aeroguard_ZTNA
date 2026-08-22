@@ -85,6 +85,30 @@ trap 'echo "[*] Stopping sniffer and restoring dark mode..."; kill "$SNIFFER_PID
 # Brief pause to let the sniffer bind before the gateway starts
 sleep 1
 
+# Re-check port 8000 right before the gateway actually binds it — Step 2's
+# check above only guarantees the port was free *at that moment*; anything
+# that respawns or starts up independently (a leftover dev server, another
+# tool defaulting to 8000, etc.) in the few seconds since would still cause
+# the exact same bind failure, just later, and identifying it after the
+# fact meant racing to catch it manually. This names the culprit process
+# before failing instead of leaving a bare "address already in use".
+INTRUDER_PID=$(ss -tlnp "sport = :8000" 2>/dev/null | grep -oP 'pid=\K[0-9]+' | sort -u)
+if [ -n "$INTRUDER_PID" ]; then
+    echo ""
+    echo "[!] Port 8000 was claimed again just before startup by:"
+    for p in $INTRUDER_PID; do
+        echo "    PID $p — $(ps -p "$p" -o comm=,args= 2>/dev/null)"
+    done
+    echo "[*] Killing it and retrying once..."
+    kill -9 $INTRUDER_PID 2>/dev/null
+    sleep 1
+    if ss -tln 2>/dev/null | grep -q ':8000 '; then
+        echo "[!] Still occupied — aborting. Find and stop whatever's using"
+        echo "    port 8000 on this machine, then re-run this script."
+        exit 1
+    fi
+fi
+
 # Step 3: Start FastAPI gateway on loopback (reachable only after a verified knock)
 echo ""
 echo "[*] Step 3 — Starting AeroGuard Gateway (127.0.0.1:8000)..."

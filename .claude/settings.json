@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(rm -f smoke_test_temp.py)",
-      "Bash(tasklist)"
+      "Bash(tasklist)",
+      "Bash(py \"C:\\\\Users\\\\sithum\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-sithum-Desktop-AeroGuard-ZTNA-Project\\\\d8b0337d-5e82-492e-8524-4c3affc57206\\\\scratchpad\\\\test_terminal_focus.py\")"
     ]
   }
 }

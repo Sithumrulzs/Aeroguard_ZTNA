@@ -45,6 +45,17 @@ class NetworkService {
     // load, a concurrent knock) — one attempt right after a fixed delay was
     // declaring the whole knock "rejected" for what was really just a late
     // rule, not a real denial.
+    //
+    // A knock grant is NOT idempotent — each successful POST injects a
+    // fresh firewall rule and logs a new session. An exception here only
+    // means the *request* or *response* went missing, not which one: if
+    // the gateway actually processed attempt N (rules injected, session
+    // granted, logged) and just the response got lost on the way back,
+    // blindly resending duplicates the grant. Before resending, check
+    // whether a session for this device is already active — that endpoint
+    // is itself only reachable once the sniffer has injected an ACCEPT
+    // rule for this IP, so it can't false-positive on a request that
+    // genuinely never arrived.
     const maxAttempts = 4;
     for (var attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
@@ -66,10 +77,34 @@ class NetworkService {
       } catch (e) {
         debugPrint('[-] Gateway unreachable (attempt $attempt): $e');
         if (attempt == maxAttempts) return false;
+
+        if (await _alreadyGranted()) {
+          debugPrint('[+] KNOCK ACCEPTED — response was lost, but session '
+              'is already active (attempt $attempt). Not resending.');
+          return true;
+        }
+
         await Future.delayed(const Duration(seconds: 2));
       }
     }
     return false;
+  }
+
+  /// Checked only between retry attempts, after a request has already gone
+  /// out and failed to come back — never before the first attempt, since
+  /// this endpoint is unreachable until a knock has actually been granted
+  /// and is unrelated to (does not itself constitute) a knock.
+  static Future<bool> _alreadyGranted() async {
+    try {
+      final response = await http
+          .get(Uri.parse(ApiConstants.terminalSessionEndpoint))
+          .timeout(const Duration(seconds: 4));
+      if (response.statusCode != 200) return false;
+      final data = jsonDecode(response.body) as Map<String, dynamic>;
+      return data['active'] == true;
+    } catch (_) {
+      return false; // still unreachable — the original request truly never landed.
+    }
   }
 
   /// Terminates the admin's active session — removes iptables rules for

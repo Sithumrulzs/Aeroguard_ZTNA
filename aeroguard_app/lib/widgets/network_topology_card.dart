@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import '../config/api_constants.dart';
 import '../config/transitions.dart';
 import '../screens/provision_token_screen.dart';
+import '../services/theme_controller.dart';
 import 'gloss_panel.dart';
 import 'network_topology_painter.dart';
 import 'network_topology_sheets.dart';
@@ -275,17 +276,21 @@ class _NetworkTopologyCardState extends State<NetworkTopologyCard>
     return '${diff.inHours}h ago';
   }
 
+  // The pill names what's actually down — datacenter unreachable, never
+  // "gateway offline", since the gateway is what served this data in the
+  // first place. See NetworkTopologyPainter for the matching node-level
+  // reasoning.
   Color get _statusColor => switch (_data.status) {
         GatewayStatus.secure    => TopoColors.secure,
-        GatewayStatus.unsecured => TopoColors.warn,
-        GatewayStatus.offline   => TopoColors.danger,
-        GatewayStatus.checking  => TopoColors.textMuted,
+        GatewayStatus.unsecured => TopoColors.amber,
+        GatewayStatus.offline   => TopoColors.alertRed,
+        GatewayStatus.checking  => TopoColors.textFaint,
       };
 
   String get _statusPillLabel => switch (_data.status) {
         GatewayStatus.secure    => 'Live',
         GatewayStatus.unsecured => 'Unsecured',
-        GatewayStatus.offline   => 'Offline',
+        GatewayStatus.offline   => 'Datacenter Offline',
         GatewayStatus.checking  => 'Checking',
       };
 
@@ -346,9 +351,20 @@ class _NetworkTopologyCardState extends State<NetworkTopologyCard>
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: TopoColors.cardBg,
-        borderRadius: BorderRadius.circular(14),
+        gradient: LinearGradient(
+          // ~155° — down and slightly leftward, per spec.
+          begin: Alignment.topRight,
+          end: Alignment(-0.6, 1),
+          colors: TopoColors.cardGradient,
+        ),
+        borderRadius: BorderRadius.circular(28),
         border: Border.all(color: TopoColors.cardBorder),
+        boxShadow: ThemeController.instance.isDark.value
+            ? [const BoxShadow(color: Color(0x59_0D1421), blurRadius: 60, offset: Offset(0, 24))]
+            : [
+                const BoxShadow(color: Color(0x1F1E325A), blurRadius: 55, offset: Offset(0, 24)),
+                const BoxShadow(color: Color(0x0D1E325A), blurRadius: 10, offset: Offset(0, 2)),
+              ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -357,54 +373,41 @@ class _NetworkTopologyCardState extends State<NetworkTopologyCard>
           Padding(
             padding: const EdgeInsets.fromLTRB(8, 14, 8, 6),
             child: SizedBox(
-              height: 230,
+              height: 260,
               child: _loading ? _buildLoading() : _buildGraph(),
             ),
           ),
-          const Divider(color: TopoColors.divider, height: 1),
+          Divider(color: TopoColors.divider, height: 1),
           _buildFooter(),
         ],
       ),
     );
   }
 
-  Widget _buildLoading() => const Center(
+  Widget _buildLoading() => Center(
         child: SizedBox(
           height: 22,
           width: 22,
-          child: CircularProgressIndicator(strokeWidth: 1.5, valueColor: AlwaysStoppedAnimation(TopoColors.admin)),
+          child: CircularProgressIndicator(strokeWidth: 1.5, valueColor: AlwaysStoppedAnimation(TopoColors.brandBlue)),
         ),
       );
 
+  // Title moved out of the card entirely — see the "NETWORK MAP" section
+  // label admin_dashboard.dart places above this widget, same treatment as
+  // "SECURITY POSTURE" above the metric cards. This header is now just the
+  // live status pill, right-aligned. (A left-side gateway identifier — e.g.
+  // "SITHUM-GW-01" — belongs here too per the design mockup, but no
+  // backend field for gateway identity exists yet to source it from; adding
+  // one hardcoded would just be fake data. Slot's ready for it once a real
+  // field exists.)
   Widget _buildHeader() {
     final animated = _data.status == GatewayStatus.secure;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: const BoxDecoration(border: Border(bottom: BorderSide(color: TopoColors.divider))),
+      decoration: BoxDecoration(border: Border(bottom: BorderSide(color: TopoColors.divider))),
       child: Row(
+        mainAxisAlignment: MainAxisAlignment.end,
         children: [
-          Container(
-            height: 32,
-            width: 32,
-            decoration: BoxDecoration(
-              gradient: glassTint(TopoColors.admin),
-              border: Border.all(color: TopoColors.admin.withValues(alpha: 0.4)),
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: const Icon(Icons.hub_rounded, color: TopoColors.admin, size: 17),
-          ),
-          const SizedBox(width: 12),
-          const Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Network Topology',
-                    style: TextStyle(color: TopoColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w500)),
-                SizedBox(height: 2),
-                Text('2 node groups · 1 gateway', style: TextStyle(color: TopoColors.textMuted, fontSize: 11)),
-              ],
-            ),
-          ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
             decoration: BoxDecoration(
@@ -533,17 +536,17 @@ class _NetworkTopologyCardState extends State<NetworkTopologyCard>
         behavior: HitTestBehavior.opaque,
         child: Row(
           children: [
-            const Icon(Icons.history_toggle_off_rounded, color: TopoColors.textMuted, size: 14),
+            Icon(Icons.history_toggle_off_rounded, color: TopoColors.textFaint, size: 14),
             const SizedBox(width: 8),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('LAST KNOCK',
+                Text('LAST KNOCK',
                     style: TextStyle(
-                        color: TopoColors.textMuted, fontSize: 10, letterSpacing: 0.6, fontWeight: FontWeight.w600)),
+                        color: TopoColors.textFaint, fontSize: 10, letterSpacing: 0.6, fontWeight: FontWeight.w600)),
                 const SizedBox(height: 2),
                 Text(_lastKnockLabel,
-                    style: const TextStyle(color: TopoColors.textPrimary, fontSize: 12, fontWeight: FontWeight.w500)),
+                    style: TextStyle(color: TopoColors.textPrimary, fontSize: 12, fontWeight: FontWeight.w500)),
               ],
             ),
           ],

@@ -33,6 +33,14 @@ UDP_KNOCK_PORT  = int(os.getenv("UDP_KNOCK_PORT",          "7777"))
 GATEWAY_PORT    = int(os.getenv("GATEWAY_PORT",            "8000"))
 SESSION_TIMEOUT = int(os.getenv("SESSION_TIMEOUT_SECONDS", "3600"))
 
+# FIDS lives on its own isolated VM, unreachable from a laptop directly (no
+# route to its internal-only subnet). The terminal exe only ever targets the
+# gateway's own LAN address for FIDS_URL — this DNAT rewrites that, per
+# granted laptop, through to FIDS's real address on the internal link. Same
+# shape as the GATEWAY_PORT loopback DNAT below, just a different target.
+FIDS_HOST = os.getenv("FIDS_HOST", "10.66.100.150")
+FIDS_PORT = int(os.getenv("FIDS_PORT", "3000"))
+
 _iface_env = os.getenv("GATEWAY_INTERFACE", "").strip()
 IFACE       = _iface_env if _iface_env else str(scapy_conf.iface)
 GATEWAY_IP  = os.getenv("GATEWAY_IP", "") or get_if_addr(IFACE)
@@ -191,6 +199,16 @@ def _inject_laptop(laptop_ip: str):
          "-j", "DNAT", "--to-destination", f"127.0.0.1:{GATEWAY_PORT}"],
         capture_output=True,
     )
+    # FIDS dashboard — laptop hits the gateway's own LAN IP:FIDS_PORT (the
+    # only address it has a route to); DNAT rewrites that through to FIDS's
+    # real address on the isolated internal link. Dark until this fires —
+    # the default FORWARD/INPUT DROP policy already covers it otherwise.
+    subprocess.run(
+        ["iptables", "-t", "nat", "-I", "PREROUTING", "1",
+         "-s", laptop_ip, "-p", "tcp", "--dport", str(FIDS_PORT),
+         "-j", "DNAT", "--to-destination", f"{FIDS_HOST}:{FIDS_PORT}"],
+        capture_output=True,
+    )
     _active_laptops.add(laptop_ip)
     print(f"[+] LAPTOP ACCESS   {laptop_ip} — full access granted (ping/nmap enabled)")
 
@@ -213,6 +231,12 @@ def _remove_laptop(laptop_ip: str):
         ["iptables", "-t", "nat", "-D", "PREROUTING",
          "-s", laptop_ip, "-p", "tcp", "--dport", str(GATEWAY_PORT),
          "-j", "DNAT", "--to-destination", f"127.0.0.1:{GATEWAY_PORT}"],
+        capture_output=True,
+    )
+    subprocess.run(
+        ["iptables", "-t", "nat", "-D", "PREROUTING",
+         "-s", laptop_ip, "-p", "tcp", "--dport", str(FIDS_PORT),
+         "-j", "DNAT", "--to-destination", f"{FIDS_HOST}:{FIDS_PORT}"],
         capture_output=True,
     )
     _flush_conntrack(laptop_ip)

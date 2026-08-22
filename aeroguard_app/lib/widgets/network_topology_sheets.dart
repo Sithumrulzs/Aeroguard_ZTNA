@@ -14,8 +14,8 @@ Widget _sheetRow(String label, String value) => Padding(
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Text(label, style: const TextStyle(color: TopoColors.textSecondary, fontSize: 13)),
-          Text(value, style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w600)),
+          Text(label, style: TextStyle(color: TopoColors.textSecondary, fontSize: 13)),
+          Text(value, style: TextStyle(color: TopoColors.textPrimary, fontSize: 13, fontWeight: FontWeight.w600)),
         ],
       ),
     );
@@ -34,7 +34,7 @@ void showTopoListSheet(
 }) {
   showModalBottomSheet(
     context: context,
-    backgroundColor: TopoColors.cardBg,
+    backgroundColor: TopoColors.cardGradient.first,
     shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
     builder: (ctx) => SafeArea(
       child: Padding(
@@ -46,18 +46,18 @@ void showTopoListSheet(
             Row(children: [
               Icon(icon, color: color, size: 20),
               const SizedBox(width: 10),
-              Text(title, style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+              Text(title, style: TextStyle(color: TopoColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w700)),
             ]),
             const SizedBox(height: 16),
             if (names.isEmpty)
-              Text(emptyLabel, style: const TextStyle(color: TopoColors.textMuted, fontSize: 13))
+              Text(emptyLabel, style: TextStyle(color: TopoColors.textFaint, fontSize: 13))
             else
               ...names.map((n) => Padding(
                     padding: const EdgeInsets.symmetric(vertical: 6),
                     child: Row(children: [
                       Icon(Icons.circle, size: 6, color: color),
                       const SizedBox(width: 10),
-                      Text(_simpleCase(n), style: const TextStyle(color: Colors.white, fontSize: 14)),
+                      Text(_simpleCase(n), style: TextStyle(color: TopoColors.textPrimary, fontSize: 14)),
                     ]),
                   )),
             if (actionLabel != null && onAction != null) ...[
@@ -100,7 +100,7 @@ void showTopoGatewaySheet(
 }) {
   showModalBottomSheet(
     context: context,
-    backgroundColor: TopoColors.cardBg,
+    backgroundColor: TopoColors.cardGradient.first,
     shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
     builder: (ctx) => SafeArea(
       child: Padding(
@@ -112,8 +112,8 @@ void showTopoGatewaySheet(
             Row(children: [
               Icon(Icons.shield_rounded, color: color, size: 20),
               const SizedBox(width: 10),
-              const Text('Gateway Health',
-                  style: TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.w700)),
+              Text('Gateway Health',
+                  style: TextStyle(color: TopoColors.textPrimary, fontSize: 15, fontWeight: FontWeight.w700)),
             ]),
             const SizedBox(height: 4),
             Text('Gateway is $statusSpeech', style: TextStyle(color: color, fontSize: 12)),

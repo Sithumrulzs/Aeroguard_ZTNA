@@ -2,42 +2,83 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import '../services/auth_service.dart';
+import '../services/biometric_service.dart';
 import '../services/enclave_service.dart';
-import 'home_load_page.dart';
+import 'biometric_auth_screen.dart';
+import 'sign_in_page.dart';
+import 'vendor_dashboard.dart';
+
+// Boot-screen background — the intro video is the only loading UI now, so
+// this is just what shows before the first video frame and behind the
+// handoff fade; no separate loading screen exists to keep it in sync with.
+const Color kBootBackgroundColor = Color(0xFF050810);
 
 // ── Handoff timing ──────────────────────────────────────────────────────
-// The asset itself is trimmed and graded to end here: the turbine zooms in
-// to fill the frame around 5.5-6.5s and a fade baked into the last ~0.5s
-// of the file eases it to an exact, pixel-matched kHomeLoadBackgroundColor
-// by 6.6s (the file's full length, which also carries its own synced
-// engine-ambience audio bed) — no separate trailing static hold to cut
-// around. This constant sits 100ms before that true end, purely as a
-// safety margin against video_player's position/duration edge cases, not
-// as a color-correction trim. At this position the screen cuts straight to
-// HomeLoadPage with zero fade of our own, so its reveal lands in the very
-// same instant.
-const int _videoCutoffMs = 6500;
-// Tapping to skip *before* that position jumps from an arbitrary, likely
-// colorful video frame rather than the matching dark ending — that jump
-// still gets a quick color-matched fade first so it isn't a jarring pop.
-// Not used for the cutoff above, which is already at the matching color.
+// shots.mp4 is exactly 5.0s, video-only (no audio bed), and does not fade
+// to a matching dark ending; it settles on a plain white logo-reveal
+// frame. So reaching this position is never a color-matched cut on its
+// own: _onVideoTick always routes through the same fade overlay _onTap
+// uses for an early skip (see _startHandoff), masking the white-to-dark
+// jump either way. 100ms before the true 5000ms length, as a safety
+// margin against video_player's position/duration edge cases.
+const int _videoCutoffMs = 4900;
+// Fade duration for the color-matched overlay — used both for an early
+// tap-to-skip and for reaching _videoCutoffMs naturally, since neither
+// case lands on a frame that already matches the next screen.
 const int _skipFadeMs = 300;
-// How long the video itself takes to fade in from the (black) scaffold
-// background once it starts playing, instead of snapping straight to
-// fully visible.
-const int _fadeInMs = 500;
 
-/// Cold-start intro video — full-bleed, skippable, and purely cosmetic.
-/// It must never delay reaching [HomeLoadPage], so every exit path
-/// (completion, tap, or a slow/failed initialization) funnels through
-/// [_goToHome].
+/// Cold-start intro video — full-bleed, skippable, and the only loading
+/// animation in the app now. It must never delay reaching the resolved
+/// auth screen, so every exit path (completion, tap, or a slow/failed
+/// initialization) funnels through [_goToHome], and destination
+/// resolution itself starts immediately in [initState] rather than after
+/// the video ends, so it's normally already done by the time the fade
+/// finishes instead of adding a visible second wait.
 class IntroVideoScreen extends StatefulWidget {
   const IntroVideoScreen({super.key});
 
-  /// Enclave init kicked off from [initState] so the video's ~7s runtime
-  /// doubles as loading time. HomeLoadPage's own boot sequence awaits this
-  /// same future instead of starting a second, redundant initialization.
+  /// Enclave init kicked off from [initState] so the video's ~5s runtime
+  /// doubles as loading time. Shared with [resolveDestination] callers
+  /// that also need it initialized before landing on an authenticated
+  /// screen.
   static Future<void>? enclaveInitFuture;
+
+  /// Decides which screen to land on, with no visible loading step of its
+  /// own: a still-valid vendor session skips straight back to
+  /// [VendorDashboard]; otherwise [BiometricAuthScreen] when a sensor and
+  /// saved credentials are both usable, else [SignInPage]. Public (and
+  /// static, not tied to any instance) so [main.dart]'s hot-resume /
+  /// reduce-motion path — which skips the video entirely — can reuse the
+  /// exact same resolution instead of duplicating it.
+  static Future<Widget> resolveDestination() async {
+    final vendorSession = await AuthService.getVendorSession();
+    if (vendorSession != null) {
+      try {
+        final expires = DateTime.parse(vendorSession['expiresAt']!);
+        if (DateTime.now().toUtc().isBefore(expires.toUtc())) {
+          return VendorDashboard(
+            vendorName: vendorSession['vendorName']!,
+            company: vendorSession['company']!,
+            token: vendorSession['token']!,
+            expiresAt: vendorSession['expiresAt']!,
+          );
+        }
+      } catch (_) {}
+      // Unparsable or expired — stale, drop it and fall through to admin flow.
+      await AuthService.clearVendorSession();
+    }
+
+    final hasCreds = await AuthService.hasBiometricCredentials();
+    if (!hasCreds) return const SignInPage();
+
+    final bioAvailable = await BiometricService.isAvailable();
+    if (!bioAvailable) {
+      await AuthService.clearBiometricCredentials();
+      return const SignInPage();
+    }
+
+    return const BiometricAuthScreen();
+  }
 
   @override
   State<IntroVideoScreen> createState() => _IntroVideoScreenState();
@@ -48,8 +89,12 @@ class _IntroVideoScreenState extends State<IntroVideoScreen>
   VideoPlayerController? _controller;
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeOpacity;
-  late final AnimationController _fadeInCtrl;
-  late final Animation<double> _fadeInOpacity;
+
+  // Kicked off immediately, in parallel with the video and enclave init —
+  // by the time anything actually navigates, this has normally already
+  // resolved, so awaiting it later adds no visible delay.
+  late final Future<Widget> _destinationFuture = IntroVideoScreen
+      .resolveDestination();
 
   bool _navigated = false;
   bool _handoffStarted = false;
@@ -70,17 +115,9 @@ class _IntroVideoScreenState extends State<IntroVideoScreen>
       parent: _fadeCtrl,
       curve: Curves.easeInOut,
     );
-    _fadeInCtrl = AnimationController(
-      duration: const Duration(milliseconds: _fadeInMs),
-      vsync: this,
-    );
-    _fadeInOpacity = CurvedAnimation(
-      parent: _fadeInCtrl,
-      curve: Curves.easeOut,
-    );
 
     final controller = VideoPlayerController.asset(
-      'assets/video/aeroguard_intro_noword.mp4',
+      'assets/video/shots.mp4',
     );
     _controller = controller;
     controller.addListener(_onVideoTick);
@@ -90,7 +127,6 @@ class _IntroVideoScreenState extends State<IntroVideoScreen>
         .then((_) {
           if (!mounted || _navigated) return;
           controller.play();
-          _fadeInCtrl.forward();
           setState(() {});
         })
         .catchError((_) {
@@ -98,8 +134,14 @@ class _IntroVideoScreenState extends State<IntroVideoScreen>
           _goToHome();
         });
 
-    // The video is cosmetic and must never block boot.
-    Future.delayed(const Duration(milliseconds: 800), () {
+    // The video is cosmetic and must never block boot — but 800ms turned
+    // out to be shorter than real hardware decoder cold-start (codec
+    // allocation + surface negotiation routinely takes longer than that on
+    // a physical device, confirmed live: ExoPlayer was Release()'d mid
+    // codec setup, before rendering a single frame, every launch). 2.5s
+    // gives real initialization a fair chance while still bounding the
+    // worst case well under the video's own ~5s runtime.
+    Future.delayed(const Duration(milliseconds: 2500), () {
       if (!mounted || _navigated) return;
       if (!controller.value.isInitialized) _goToHome();
     });
@@ -111,11 +153,20 @@ class _IntroVideoScreenState extends State<IntroVideoScreen>
     final value = controller.value;
     if (!value.isInitialized) return;
     if (value.position >= const Duration(milliseconds: _videoCutoffMs)) {
-      // Already at the matching dark ending — cut immediately, no fade, so
-      // the reveal lands in the same instant the turbine goes dark.
-      _handoffStarted = true;
-      _goToHome();
+      // shots.mp4 ends on a white logo-reveal frame, not the app's dark
+      // theme — always mask the jump with the fade, same as an early skip.
+      _startHandoff();
+      return;
     }
+    // Forces a repaint on every position update instead of relying solely
+    // on the platform texture's own "new frame available" signal — on this
+    // device/driver combo that signal wasn't reliably reaching the
+    // compositor, confirmed live: the decoder ran correctly (position
+    // presumably advancing) but the on-screen Texture stayed locked to the
+    // first frame for 7+ seconds straight, well past the cutoff, with
+    // disabling Impeller alone not fixing it. Cheap — just marks this
+    // widget dirty, doesn't rebuild the video's own decode pipeline.
+    if (mounted) setState(() {});
   }
 
   void _onTap() {
@@ -127,43 +178,53 @@ class _IntroVideoScreenState extends State<IntroVideoScreen>
       _goToHome();
       return;
     }
-    if (controller.value.position >=
-        const Duration(milliseconds: _videoCutoffMs)) {
-      _handoffStarted = true;
-      _goToHome();
-    } else {
-      // Skipping mid-video — this frame isn't near the background color,
-      // so mask the jump with a quick fade first.
-      _startHandoff();
-    }
+    // No frame in this clip matches the next screen's background (it ends
+    // on a plain white logo reveal) — every exit, early skip or reaching
+    // _videoCutoffMs, masks the jump with the same fade.
+    _startHandoff();
   }
 
   // Fades a color-matched overlay over the (still-playing) video before
-  // handing off. Only used when skipping earlier than _videoCutoffMs,
-  // where the current frame is an arbitrary color, not the matching dark
-  // ending — the natural end-of-video handoff above cuts instantly instead.
+  // handing off — used for every exit path once a frame is actually on
+  // screen, since no point in shots.mp4 already matches the next screen's
+  // background (see _onVideoTick / _onTap).
   void _startHandoff() {
     if (_navigated || _handoffStarted) return;
     _handoffStarted = true;
     _fadeCtrl.forward().whenComplete(_goToHome);
   }
 
-  void _goToHome() {
+  Future<void> _goToHome() async {
     if (_navigated || !mounted) return;
     _navigated = true;
+    // Captured now, while this widget is definitely still active, and used
+    // below instead of a second `Navigator.of(context)` call after the
+    // await. `State.mounted` only tracks disposal, not deactivation — this
+    // widget's element can go briefly inactive (still "mounted") during the
+    // gap below, and calling `Navigator.of(context)` in that window throws
+    // "Looking up a deactivated widget's ancestor is unsafe", which — since
+    // the handoff fade has already gone fully opaque by the time this runs
+    // — would strand the screen on a solid, seemingly-frozen frame instead
+    // of completing the handoff. A `NavigatorState` captured beforehand
+    // stays valid across that gap; only its own `mounted` needs checking.
+    final navigator = Navigator.of(context);
+    // Normally already resolved (kicked off in initState, well before any
+    // exit path can fire) — this await is just claiming the result, not
+    // adding a real wait.
+    final destination = await _destinationFuture;
+    if (!navigator.mounted) return;
     // A plain instant swap, not a route-level crossfade: by the time this
-    // runs, the screen is already either the video's matching-color ending
-    // or (for an early skip) the fully-opaque overlay — both pixel-
-    // identical to HomeLoadPage's own background, so there's nothing left
-    // to blend at the route level. Layering a second fade on top of
-    // HomeLoadPage's own entrance (which starts animating the instant it
-    // mounts) would just multiply the two together into a duller,
-    // slower-reading reveal instead of one clean, decisive motion.
-    Navigator.of(context).pushReplacement(
+    // runs, the screen is already either the fully-opaque handoff overlay
+    // (a frame was showing) or the untouched scaffold background (no frame
+    // ever appeared — load failure, slow init, or a tap before ready) —
+    // either way pixel-identical to kBootBackgroundColor, so there's
+    // nothing left to blend at the route level. The destination screens
+    // each run their own independent entrance animation from there.
+    navigator.pushReplacement(
       PageRouteBuilder<void>(
         transitionDuration: Duration.zero,
         reverseTransitionDuration: Duration.zero,
-        pageBuilder: (_, _, _) => const HomeLoadPage(fromVideo: true),
+        pageBuilder: (_, _, _) => destination,
       ),
     );
   }
@@ -173,7 +234,6 @@ class _IntroVideoScreenState extends State<IntroVideoScreen>
     _controller?.removeListener(_onVideoTick);
     _controller?.dispose();
     _fadeCtrl.dispose();
-    _fadeInCtrl.dispose();
     super.dispose();
   }
 
@@ -183,33 +243,29 @@ class _IntroVideoScreenState extends State<IntroVideoScreen>
     final isReady = controller != null && controller.value.isInitialized;
 
     return Scaffold(
-      backgroundColor: kHomeLoadBackgroundColor,
+      backgroundColor: kBootBackgroundColor,
       body: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: _onTap,
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Fades in from the (black) scaffold background once playback
-            // starts, instead of snapping straight to fully visible.
+            // Snaps straight to visible once playback starts — no fade-in.
             isReady
-                ? FadeTransition(
-                    opacity: _fadeInOpacity,
-                    child: FittedBox(
-                      fit: BoxFit.cover,
-                      child: SizedBox(
-                        width: controller.value.size.width,
-                        height: controller.value.size.height,
-                        child: VideoPlayer(controller),
-                      ),
+                ? FittedBox(
+                    fit: BoxFit.cover,
+                    child: SizedBox(
+                      width: controller.value.size.width,
+                      height: controller.value.size.height,
+                      child: VideoPlayer(controller),
                     ),
                   )
                 : const SizedBox.shrink(),
             // Color-perfect handoff overlay — fades in above the video so
-            // the cut into HomeLoadPage shows zero visible color step.
+            // the cut into the resolved screen shows zero visible color step.
             FadeTransition(
               opacity: _fadeOpacity,
-              child: Container(color: kHomeLoadBackgroundColor),
+              child: Container(color: kBootBackgroundColor),
             ),
           ],
         ),

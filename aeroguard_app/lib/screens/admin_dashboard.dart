@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_svg/flutter_svg.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_constants.dart';
+import '../config/theme.dart';
 import '../config/transitions.dart';
 import '../services/auth_service.dart';
 import '../services/biometric_service.dart';
@@ -66,7 +67,7 @@ class _AdminDashboardState extends State<AdminDashboard>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF050810),
+      backgroundColor: AppColors.surfaceMuted,
       body: FadeTransition(
         opacity: _tabFade,
         child: IndexedStack(
@@ -111,12 +112,8 @@ class _BottomNav extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF080E1A),
-        border: Border(
-          top: BorderSide(
-            color: const Color(0xFF00C3FF).withValues(alpha: 0.08),
-          ),
-        ),
+        color: AppColors.surface,
+        border: Border(top: BorderSide(color: AppColors.border)),
       ),
       child: SafeArea(
         top: false,
@@ -190,16 +187,14 @@ class _NavItem extends StatelessWidget {
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
                 color: active
-                    ? const Color(0xFF00C3FF).withValues(alpha: 0.12)
+                    ? AppColors.brandBlue.withValues(alpha: 0.12)
                     : Colors.transparent,
                 borderRadius: BorderRadius.circular(10),
               ),
               child: Icon(
                 icon,
                 size: 20,
-                color: active
-                    ? const Color(0xFF00C3FF)
-                    : const Color(0xFF475569),
+                color: active ? AppColors.brandBlue : AppColors.inkSecondary,
               ),
             ),
             const SizedBox(height: 3),
@@ -209,9 +204,7 @@ class _NavItem extends StatelessWidget {
                 fontSize: 9,
                 letterSpacing: 1.5,
                 fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                color: active
-                    ? const Color(0xFF00C3FF)
-                    : const Color(0xFF475569),
+                color: active ? AppColors.brandBlue : AppColors.inkSecondary,
               ),
             ),
           ],
@@ -332,28 +325,20 @@ class _OverviewTabState extends State<_OverviewTab>
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF050810), Color(0xFF0A1628)],
-        ),
-      ),
+      color: AppColors.surfaceMuted,
       child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // App bar — small kicker on top, a warmer personal greeting
-            // carries the visual weight instead of a flat static title.
-            // A hairline bottom border gives it a defined edge against the
-            // scroll content below, instead of bleeding straight into it.
+            // Solid blue header banner — the one colored surface on the
+            // page, everything below it is white/light cards (see Solora
+            // reference: colored top bar, white content).
             Container(
-              padding: const EdgeInsets.fromLTRB(24, 16, 12, 16),
+              padding: const EdgeInsets.fromLTRB(24, 16, 16, 20),
               decoration: BoxDecoration(
-                border: Border(
-                  bottom: BorderSide(
-                    color: Colors.white.withValues(alpha: 0.05),
-                  ),
+                color: AppColors.brandBlue,
+                borderRadius: const BorderRadius.vertical(
+                  bottom: Radius.circular(24),
                 ),
               ),
               child: Row(
@@ -363,17 +348,17 @@ class _OverviewTabState extends State<_OverviewTab>
                     children: [
                       Row(
                         children: [
-                          const Text(
+                          Text(
                             'COMMAND CENTER',
                             style: TextStyle(
-                              color: Color(0xFF475569),
+                              color: Colors.white.withValues(alpha: 0.75),
                               fontSize: 10,
                               fontWeight: FontWeight.w700,
                               letterSpacing: 2.0,
                             ),
                           ),
                           const SizedBox(width: 8),
-                          _PulsingDot(color: const Color(0xFF10B981)),
+                          _PulsingDot(color: AppColors.success),
                         ],
                       ),
                       const SizedBox(height: 4),
@@ -396,16 +381,14 @@ class _OverviewTabState extends State<_OverviewTab>
                       width: 40,
                       decoration: BoxDecoration(
                         shape: BoxShape.circle,
-                        color: const Color(0xFF00C3FF).withValues(alpha: 0.10),
+                        color: Colors.white.withValues(alpha: 0.15),
                         border: Border.all(
-                          color: const Color(
-                            0xFF00C3FF,
-                          ).withValues(alpha: 0.25),
+                          color: Colors.white.withValues(alpha: 0.3),
                         ),
                       ),
                       child: const Icon(
                         Icons.power_settings_new,
-                        color: Color(0xFF00C3FF),
+                        color: Colors.white,
                         size: 18,
                       ),
                     ),
@@ -414,10 +397,11 @@ class _OverviewTabState extends State<_OverviewTab>
               ),
             ),
 
-            // Vendor device/attempt polling still runs here, silently — it
-            // only ever surfaces as an OS popup notification now. Approve
-            // and Decline happen from that notification's own actions, not
-            // from anything rendered on this page.
+            // Vendor device/attempt polling. The OS popup notification is a
+            // best-effort alert, but the in-app card rendered by
+            // _PendingDeviceWatcher is the reliable path — notification
+            // action taps aren't guaranteed to fire correctly on every
+            // Android build.
             const _PendingDeviceWatcher(),
             const _VendorAttemptsWatcher(),
 
@@ -469,7 +453,7 @@ class _OverviewTabState extends State<_OverviewTab>
                               icon: Icons.admin_panel_settings_outlined,
                               names: _registeredAdminNames,
                               isLoading: _loadingStats,
-                              accentColor: const Color(0xFF00C3FF),
+                              accentColor: AppColors.brandBlue,
                             ),
                           ),
                           const SizedBox(width: 10),
@@ -480,7 +464,7 @@ class _OverviewTabState extends State<_OverviewTab>
                               icon: Icons.badge_outlined,
                               names: _vendorNames,
                               isLoading: _loadingStats,
-                              accentColor: Colors.orangeAccent,
+                              accentColor: AppColors.brandBlue,
                             ),
                           ),
                           const SizedBox(width: 10),
@@ -490,7 +474,7 @@ class _OverviewTabState extends State<_OverviewTab>
                               value: _totalKnocks,
                               icon: Icons.bolt_rounded,
                               isLoading: _loadingStats,
-                              accentColor: const Color(0xFF10B981),
+                              accentColor: AppColors.brandBlue,
                             ),
                           ),
                         ],
@@ -498,6 +482,11 @@ class _OverviewTabState extends State<_OverviewTab>
                     ),
                     const SizedBox(height: 26),
 
+                    const _SectionLabel(
+                      icon: Icons.hub_rounded,
+                      label: 'NETWORK MAP',
+                    ),
+                    const SizedBox(height: 14),
                     NetworkTopologyCard(onViewVault: widget.onViewVault),
                     const SizedBox(height: 26),
 
@@ -528,12 +517,12 @@ class _SectionLabel extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        Icon(icon, color: const Color(0xFF475569), size: 13),
+        Icon(icon, color: AppColors.inkSecondary, size: 13),
         const SizedBox(width: 8),
         Text(
           label,
-          style: const TextStyle(
-            color: Color(0xFF475569),
+          style: TextStyle(
+            color: AppColors.inkSecondary,
             fontSize: 10,
             fontWeight: FontWeight.w700,
             letterSpacing: 2.0,
@@ -561,44 +550,60 @@ class _QuickActionButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // The large variant (currently just "Provision Vendor") is a solid,
+    // high-urgency action button — bold color fill with white text/icon,
+    // matching the reference's solid "Emergency" button rather than the
+    // soft white-card-with-accent look every other panel uses.
+    if (large) {
+      return GestureDetector(
+        onTap: onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(vertical: 18),
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(16),
+            boxShadow: AppColors.softShadow(tint: color, opacity: 0.28),
+          ),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(icon, color: Colors.white, size: 20),
+              const SizedBox(width: 10),
+              Text(
+                label,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
     return GestureDetector(
       onTap: onTap,
       child: NeutralPanel(
         accent: color,
-        radius: large ? 16 : 14,
-        padding: EdgeInsets.symmetric(vertical: large ? 18 : 14),
-        child: large
-            ? Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(icon, color: color, size: 20),
-                  const SizedBox(width: 10),
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: color,
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-              )
-            : Column(
-                children: [
-                  Icon(icon, color: color, size: 18),
-                  const SizedBox(height: 6),
-                  Text(
-                    label.toUpperCase(),
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: color,
-                      fontSize: 9,
-                      fontWeight: FontWeight.w700,
-                      letterSpacing: 0.8,
-                    ),
-                  ),
-                ],
+        radius: 14,
+        padding: const EdgeInsets.symmetric(vertical: 14),
+        child: Column(
+          children: [
+            Icon(icon, color: color, size: 18),
+            const SizedBox(height: 6),
+            Text(
+              label.toUpperCase(),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: color,
+                fontSize: 9,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 0.8,
               ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -764,6 +769,7 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
       onTap: () => _showDetailSheet(title, subtitle, accent),
       child: NeutralPanel(
         accent: accent,
+        fillTint: true,
         radius: 20,
         padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
         child: Row(
@@ -803,7 +809,7 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
                       subtitle,
                       key: ValueKey(subtitle),
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.55),
+                        color: AppColors.inkSecondary,
                         fontSize: 11,
                       ),
                     ),
@@ -816,19 +822,18 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
               duration: const Duration(milliseconds: 400),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
               decoration: BoxDecoration(
-                gradient: glassTint(accent, alpha: 0.20),
+                color: accent,
                 borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: accent.withValues(alpha: 0.4)),
               ),
               child: Row(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Icon(badgeIcon, size: 11, color: accent),
+                  Icon(badgeIcon, size: 11, color: Colors.white),
                   const SizedBox(width: 5),
                   Text(
                     badge,
-                    style: TextStyle(
-                      color: accent,
+                    style: const TextStyle(
+                      color: Colors.white,
                       fontSize: 9,
                       fontWeight: FontWeight.w700,
                       letterSpacing: 1.5,
@@ -852,7 +857,7 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
   void _showDetailSheet(String title, String subtitle, Color accent) {
     showModalBottomSheet(
       context: context,
-      backgroundColor: const Color(0xFF0D1421),
+      backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
@@ -869,8 +874,8 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
                   const SizedBox(width: 10),
                   Text(
                     title,
-                    style: const TextStyle(
-                      color: Colors.white,
+                    style: TextStyle(
+                      color: AppColors.inkPrimary,
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
                     ),
@@ -912,8 +917,8 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
         ),
         Text(
           value,
-          style: const TextStyle(
-            color: Colors.white,
+          style: TextStyle(
+            color: AppColors.inkPrimary,
             fontSize: 13,
             fontWeight: FontWeight.w600,
           ),
@@ -981,8 +986,8 @@ class _MetricCard extends StatelessWidget {
                     alignment: Alignment.centerLeft,
                     child: Text(
                       value,
-                      style: const TextStyle(
-                        color: Colors.white,
+                      style: TextStyle(
+                        color: AppColors.inkPrimary,
                         fontSize: 28,
                         fontWeight: FontWeight.w800,
                         height: 1.0,
@@ -993,8 +998,8 @@ class _MetricCard extends StatelessWidget {
           const SizedBox(height: 4),
           Text(
             label,
-            style: const TextStyle(
-              color: Color(0xFF94A3B8),
+            style: TextStyle(
+              color: AppColors.inkFaint,
               fontSize: 9,
               letterSpacing: 1.5,
               fontWeight: FontWeight.w600,
@@ -1008,7 +1013,7 @@ class _MetricCard extends StatelessWidget {
                 ? Text(
                     names.map(_simpleCase).join('  ·  '),
                     style: TextStyle(
-                      color: Colors.white.withValues(alpha: 0.65),
+                      color: AppColors.inkSecondary,
                       fontSize: 10,
                     ),
                     maxLines: 1,
@@ -1121,19 +1126,20 @@ class _RecentActivityCardState extends State<_RecentActivityCard> {
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: const Color(0xFF0D1421),
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppColors.softShadow(opacity: 0.06),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Text(
+              Text(
                 'Recent activity',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: AppColors.inkPrimary,
                   fontSize: 14,
                   fontWeight: FontWeight.w700,
                 ),
@@ -1141,10 +1147,10 @@ class _RecentActivityCardState extends State<_RecentActivityCard> {
               const Spacer(),
               GestureDetector(
                 onTap: widget.onViewAll,
-                child: const Text(
+                child: Text(
                   'View all',
                   style: TextStyle(
-                    color: Color(0xFF00C3FF),
+                    color: AppColors.brandBlue,
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
                   ),
@@ -1154,8 +1160,8 @@ class _RecentActivityCardState extends State<_RecentActivityCard> {
           ),
           const SizedBox(height: 12),
           if (_loading)
-            const Padding(
-              padding: EdgeInsets.symmetric(vertical: 10),
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 10),
               child: Center(
                 child: SizedBox(
                   height: 18,
@@ -1163,7 +1169,7 @@ class _RecentActivityCardState extends State<_RecentActivityCard> {
                   child: CircularProgressIndicator(
                     strokeWidth: 1.5,
                     valueColor: AlwaysStoppedAnimation<Color>(
-                      Color(0xFF00C3FF),
+                      AppColors.brandBlue,
                     ),
                   ),
                 ),
@@ -1175,7 +1181,7 @@ class _RecentActivityCardState extends State<_RecentActivityCard> {
               child: Text(
                 'No knock activity yet',
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.35),
+                  color: AppColors.inkFaint,
                   fontSize: 12,
                 ),
               ),
@@ -1213,8 +1219,8 @@ class _ActivityRow extends StatelessWidget {
           Expanded(
             child: Text(
               '${_simpleCase(username)} — ${style.label}',
-              style: const TextStyle(
-                color: Colors.white,
+              style: TextStyle(
+                color: AppColors.inkPrimary,
                 fontSize: 12,
                 fontWeight: FontWeight.w500,
               ),
@@ -1224,7 +1230,7 @@ class _ActivityRow extends StatelessWidget {
           Text(
             timeLabel,
             style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.35),
+              color: AppColors.inkFaint,
               fontSize: 10,
             ),
           ),
@@ -1424,9 +1430,9 @@ class _AccessTabState extends State<_AccessTab>
   }
 
   Color get _statusColor => switch (_knockStatus) {
-    _KnockStatus.success => const Color(0xFF10B981),
-    _KnockStatus.failed => const Color(0xFFEF4444),
-    _ => const Color(0xFF00C3FF),
+    _KnockStatus.success => AppColors.success,
+    _KnockStatus.failed => AppColors.danger,
+    _ => AppColors.brandBlue,
   };
 
   IconData get _tunnelIcon => switch (_knockStatus) {
@@ -1445,13 +1451,7 @@ class _AccessTabState extends State<_AccessTab>
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF050810), Color(0xFF0A1628)],
-        ),
-      ),
+      color: AppColors.surfaceMuted,
       child: SafeArea(
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -1475,10 +1475,10 @@ class _AccessTabState extends State<_AccessTab>
                         ),
                       ),
                       const SizedBox(width: 10),
-                      const Text(
+                      Text(
                         'AEROGUARD',
                         style: TextStyle(
-                          color: Colors.white,
+                          color: AppColors.inkPrimary,
                           fontSize: 17,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 1.5,
@@ -1496,11 +1496,10 @@ class _AccessTabState extends State<_AccessTab>
                 width: double.infinity,
                 padding: const EdgeInsets.all(16),
                 decoration: BoxDecoration(
-                  color: const Color(0xFF0D1421),
+                  color: AppColors.surface,
                   borderRadius: BorderRadius.circular(16),
-                  border: Border.all(
-                    color: _statusColor.withValues(alpha: 0.2),
-                  ),
+                  border: Border.all(color: AppColors.border),
+                  boxShadow: AppColors.softShadow(tint: _statusColor, opacity: 0.08),
                 ),
                 child: Row(
                   children: [
@@ -1508,7 +1507,7 @@ class _AccessTabState extends State<_AccessTab>
                       duration: const Duration(milliseconds: 400),
                       padding: const EdgeInsets.all(8),
                       decoration: BoxDecoration(
-                        color: _statusColor.withValues(alpha: 0.1),
+                        color: _statusColor.withValues(alpha: 0.12),
                         borderRadius: BorderRadius.circular(10),
                       ),
                       child: Icon(_tunnelIcon, color: _statusColor, size: 16),
@@ -1517,10 +1516,10 @@ class _AccessTabState extends State<_AccessTab>
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'TUNNEL STATUS',
                           style: TextStyle(
-                            color: Color(0xFF475569),
+                            color: AppColors.inkFaint,
                             fontSize: 9,
                             letterSpacing: 1.5,
                             fontWeight: FontWeight.w600,
@@ -1533,7 +1532,7 @@ class _AccessTabState extends State<_AccessTab>
                             _tunnelLabel,
                             key: ValueKey(_tunnelLabel),
                             style: TextStyle(
-                              color: Colors.white.withValues(alpha: 0.65),
+                              color: AppColors.inkSecondary,
                               fontSize: 12,
                             ),
                           ),
@@ -1586,20 +1585,21 @@ class _AccessTabState extends State<_AccessTab>
                   height: 54,
                   decoration: BoxDecoration(
                     borderRadius: BorderRadius.circular(14),
-                    border: Border.all(
-                      color: Colors.orangeAccent.withValues(alpha: 0.3),
+                    color: Colors.orangeAccent,
+                    boxShadow: AppColors.softShadow(
+                      tint: Colors.orangeAccent,
+                      opacity: 0.28,
                     ),
-                    color: Colors.orangeAccent.withValues(alpha: 0.04),
                   ),
                   child: const Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
-                      Icon(Icons.qr_code, color: Colors.orangeAccent, size: 16),
+                      Icon(Icons.qr_code, color: Colors.white, size: 16),
                       SizedBox(width: 10),
                       Text(
                         'PROVISION VENDOR TOKEN',
                         style: TextStyle(
-                          color: Colors.orangeAccent,
+                          color: Colors.white,
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
                           letterSpacing: 2.0,
@@ -1658,9 +1658,9 @@ class _KnockButtonState extends State<_KnockButton>
   @override
   Widget build(BuildContext context) {
     final color = switch (widget.status) {
-      _KnockStatus.success => const Color(0xFF10B981),
-      _KnockStatus.failed => const Color(0xFFEF4444),
-      _ => const Color(0xFF00C3FF),
+      _KnockStatus.success => AppColors.success,
+      _KnockStatus.failed => AppColors.danger,
+      _ => AppColors.brandBlue,
     };
 
     // Grows once pressed (any non-idle status) so the center circle has
@@ -1681,14 +1681,19 @@ class _KnockButtonState extends State<_KnockButton>
           child: Stack(
             alignment: Alignment.center,
             children: [
-              // Ring 3 — outermost, very faint
+              // Ring 3 — outermost, very faint. Alphas bumped up from the
+              // original dark-background values — a low-alpha ring border
+              // reads as a clear glow against black but nearly disappears
+              // against white, so this whole set needed retuning rather
+              // than a straight color swap (same lesson as the biometric
+              // screen's fingerprint badge rings).
               Container(
                 height: 200 + _pulse.value * 10,
                 width: 200 + _pulse.value * 10,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: color.withValues(alpha: 0.07 + _pulse.value * 0.04),
+                    color: color.withValues(alpha: 0.14 + _pulse.value * 0.08),
                     width: 1,
                   ),
                 ),
@@ -1700,7 +1705,7 @@ class _KnockButtonState extends State<_KnockButton>
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: color.withValues(alpha: 0.13 + _pulse.value * 0.09),
+                    color: color.withValues(alpha: 0.22 + _pulse.value * 0.14),
                     width: 1,
                   ),
                 ),
@@ -1715,7 +1720,7 @@ class _KnockButtonState extends State<_KnockButton>
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: color.withValues(alpha: 0.2 + _pulse.value * 0.14),
+                    color: color.withValues(alpha: 0.32 + _pulse.value * 0.2),
                     width: 1.5,
                   ),
                   boxShadow: [
@@ -1953,12 +1958,12 @@ class _VaultTabState extends State<_VaultTab> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0D1421),
+        backgroundColor: AppColors.surface,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Text(
+        title: Text(
           'REVOKE SESSION?',
           style: TextStyle(
-            color: Color(0xFFEF4444),
+            color: AppColors.danger,
             fontSize: 14,
             letterSpacing: 2.0,
             fontWeight: FontWeight.bold,
@@ -1966,8 +1971,8 @@ class _VaultTabState extends State<_VaultTab> {
         ),
         content: Text(
           'Terminate the active tunnel for $company? This will immediately cut their network access.',
-          style: const TextStyle(
-            color: Color(0xFF94A3B8),
+          style: TextStyle(
+            color: AppColors.inkSecondary,
             fontSize: 13,
             height: 1.5,
           ),
@@ -1975,17 +1980,17 @@ class _VaultTabState extends State<_VaultTab> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text(
+            child: Text(
               'CANCEL',
-              style: TextStyle(color: Color(0xFF475569), letterSpacing: 1.0),
+              style: TextStyle(color: AppColors.inkFaint, letterSpacing: 1.0),
             ),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text(
+            child: Text(
               'REVOKE',
               style: TextStyle(
-                color: Color(0xFFEF4444),
+                color: AppColors.danger,
                 letterSpacing: 1.0,
                 fontWeight: FontWeight.w700,
               ),
@@ -2097,13 +2102,7 @@ class _VaultTabState extends State<_VaultTab> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF050810), Color(0xFF0A1628)],
-        ),
-      ),
+      color: AppColors.surfaceMuted,
       child: SafeArea(
         child: SingleChildScrollView(
           padding: const EdgeInsets.symmetric(horizontal: 24),
@@ -2111,10 +2110,10 @@ class _VaultTabState extends State<_VaultTab> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: 24),
-              const Text(
+              Text(
                 'HARDWARE VAULT',
                 style: TextStyle(
-                  color: Colors.white,
+                  color: AppColors.inkPrimary,
                   fontSize: 17,
                   fontWeight: FontWeight.bold,
                   letterSpacing: 1.5,
@@ -2124,7 +2123,7 @@ class _VaultTabState extends State<_VaultTab> {
               Text(
                 'Device identity & active sessions',
                 style: TextStyle(
-                  color: Colors.white.withValues(alpha: 0.3),
+                  color: AppColors.inkFaint,
                   fontSize: 12,
                 ),
               ),
@@ -2132,21 +2131,20 @@ class _VaultTabState extends State<_VaultTab> {
 
               // ── Secure Enclave ──────────────────────────────────────────
               _card(
-                borderColor: const Color(0xFF00C3FF).withValues(alpha: 0.1),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Row(
                       children: [
-                        _iconBox(Icons.memory, const Color(0xFF00C3FF)),
+                        _iconBox(Icons.memory, AppColors.brandBlue),
                         const SizedBox(width: 14),
                         Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
+                            Text(
                               'SECURE ENCLAVE',
                               style: TextStyle(
-                                color: Color(0xFF475569),
+                                color: AppColors.inkFaint,
                                 fontSize: 10,
                                 letterSpacing: 1.5,
                                 fontWeight: FontWeight.w600,
@@ -2155,8 +2153,8 @@ class _VaultTabState extends State<_VaultTab> {
                             const SizedBox(height: 2),
                             Text(
                               _deviceId,
-                              style: const TextStyle(
-                                color: Colors.white,
+                              style: TextStyle(
+                                color: AppColors.inkPrimary,
                                 fontSize: 13,
                                 fontWeight: FontWeight.w600,
                               ),
@@ -2165,14 +2163,11 @@ class _VaultTabState extends State<_VaultTab> {
                         ),
                       ],
                     ),
-                    Divider(
-                      color: Colors.white.withValues(alpha: 0.05),
-                      height: 24,
-                    ),
+                    Divider(color: AppColors.border, height: 24),
                     Text(
                       'ECDSA P-256 key pair locked in hardware vault.',
                       style: TextStyle(
-                        color: Colors.white.withValues(alpha: 0.3),
+                        color: AppColors.inkFaint,
                         fontSize: 11,
                         height: 1.5,
                       ),
@@ -2186,7 +2181,7 @@ class _VaultTabState extends State<_VaultTab> {
                       child: _outlineBtn(
                         'VIEW FULL IDENTITY',
                         Icons.vpn_key_outlined,
-                        const Color(0xFF00C3FF),
+                        AppColors.brandBlue,
                       ),
                     ),
                   ],
@@ -2197,18 +2192,17 @@ class _VaultTabState extends State<_VaultTab> {
 
               // ── Last knock event ────────────────────────────────────────
               _card(
-                borderColor: const Color(0xFF00C3FF).withValues(alpha: 0.08),
                 child: Row(
                   children: [
-                    _iconBox(Icons.bolt_outlined, const Color(0xFF00C3FF)),
+                    _iconBox(Icons.bolt_outlined, AppColors.brandBlue),
                     const SizedBox(width: 14),
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        const Text(
+                        Text(
                           'LAST KNOCK EVENT',
                           style: TextStyle(
-                            color: Color(0xFF475569),
+                            color: AppColors.inkFaint,
                             fontSize: 10,
                             letterSpacing: 1.5,
                             fontWeight: FontWeight.w600,
@@ -2216,20 +2210,20 @@ class _VaultTabState extends State<_VaultTab> {
                         ),
                         const SizedBox(height: 4),
                         _loading
-                            ? const SizedBox(
+                            ? SizedBox(
                                 height: 14,
                                 width: 14,
                                 child: CircularProgressIndicator(
                                   strokeWidth: 1.5,
                                   valueColor: AlwaysStoppedAnimation<Color>(
-                                    Color(0xFF00C3FF),
+                                    AppColors.brandBlue,
                                   ),
                                 ),
                               )
                             : Text(
                                 _formatTimestamp(_lastKnockAt),
-                                style: const TextStyle(
-                                  color: Colors.white,
+                                style: TextStyle(
+                                  color: AppColors.inkPrimary,
                                   fontSize: 13,
                                   fontWeight: FontWeight.w600,
                                 ),
@@ -2255,11 +2249,11 @@ class _VaultTabState extends State<_VaultTab> {
                           Colors.orangeAccent,
                         ),
                         const SizedBox(width: 14),
-                        const Expanded(
+                        Expanded(
                           child: Text(
                             'ACTIVE VENDOR SESSIONS',
                             style: TextStyle(
-                              color: Color(0xFF475569),
+                              color: AppColors.inkFaint,
                               fontSize: 10,
                               letterSpacing: 1.5,
                               fontWeight: FontWeight.w600,
@@ -2289,10 +2283,7 @@ class _VaultTabState extends State<_VaultTab> {
                           ),
                       ],
                     ),
-                    Divider(
-                      color: Colors.white.withValues(alpha: 0.05),
-                      height: 20,
-                    ),
+                    Divider(color: AppColors.border, height: 20),
                     if (_loading)
                       const Center(
                         child: Padding(
@@ -2314,16 +2305,14 @@ class _VaultTabState extends State<_VaultTab> {
                         children: [
                           Icon(
                             Icons.wifi_off_outlined,
-                            color: const Color(
-                              0xFFEF4444,
-                            ).withValues(alpha: 0.6),
+                            color: AppColors.danger.withValues(alpha: 0.7),
                             size: 15,
                           ),
                           const SizedBox(width: 10),
-                          const Text(
+                          Text(
                             'Unable to load sessions.',
                             style: TextStyle(
-                              color: Color(0xFF475569),
+                              color: AppColors.inkFaint,
                               fontSize: 12,
                             ),
                           ),
@@ -2334,16 +2323,14 @@ class _VaultTabState extends State<_VaultTab> {
                         children: [
                           Icon(
                             Icons.check_circle_outline,
-                            color: const Color(
-                              0xFF10B981,
-                            ).withValues(alpha: 0.6),
+                            color: AppColors.success.withValues(alpha: 0.8),
                             size: 15,
                           ),
                           const SizedBox(width: 10),
-                          const Text(
+                          Text(
                             'No active vendor sessions',
                             style: TextStyle(
-                              color: Color(0xFF475569),
+                              color: AppColors.inkFaint,
                               fontSize: 12,
                             ),
                           ),
@@ -2367,10 +2354,7 @@ class _VaultTabState extends State<_VaultTab> {
                               onRevoke: () => _revokeVendor(s),
                             ),
                             if (i < _sessions.length - 1)
-                              Divider(
-                                color: Colors.white.withValues(alpha: 0.04),
-                                height: 16,
-                              ),
+                              Divider(color: AppColors.border, height: 16),
                           ],
                         );
                       }),
@@ -2382,14 +2366,13 @@ class _VaultTabState extends State<_VaultTab> {
 
               // ── Security actions ────────────────────────────────────────
               _card(
-                borderColor: Colors.white.withValues(alpha: 0.05),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Text(
+                    Text(
                       'SECURITY ACTIONS',
                       style: TextStyle(
-                        color: Color(0xFF475569),
+                        color: AppColors.inkFaint,
                         fontSize: 10,
                         letterSpacing: 1.5,
                         fontWeight: FontWeight.w600,
@@ -2404,10 +2387,7 @@ class _VaultTabState extends State<_VaultTab> {
                         color: const Color(0xFF10B981),
                         onTap: _enableBiometric,
                       ),
-                      Divider(
-                        color: Colors.white.withValues(alpha: 0.05),
-                        height: 20,
-                      ),
+                      Divider(color: AppColors.border, height: 20),
                     ],
                     _VaultAction(
                       icon: Icons.qr_code,
@@ -2441,14 +2421,18 @@ class _VaultTabState extends State<_VaultTab> {
     );
   }
 
-  Widget _card({required Widget child, required Color borderColor}) =>
-      Container(
+  // `borderColor` is no longer used for the border itself (every card gets
+  // the same neutral AppColors.border now) — kept as an optional param so
+  // call sites that still pass their old accent tint don't need editing;
+  // it's unused there.
+  Widget _card({required Widget child, Color? borderColor}) => Container(
         width: double.infinity,
         padding: const EdgeInsets.all(18),
         decoration: BoxDecoration(
-          color: const Color(0xFF0D1421),
+          color: AppColors.surface,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: borderColor),
+          border: Border.all(color: AppColors.border),
+          boxShadow: AppColors.softShadow(opacity: 0.06),
         ),
         child: child,
       );
@@ -2456,7 +2440,7 @@ class _VaultTabState extends State<_VaultTab> {
   Widget _iconBox(IconData icon, Color color) => Container(
     padding: const EdgeInsets.all(8),
     decoration: BoxDecoration(
-      color: color.withValues(alpha: 0.1),
+      color: color.withValues(alpha: 0.14),
       borderRadius: BorderRadius.circular(10),
     ),
     child: Icon(icon, color: color, size: 18),
@@ -2467,8 +2451,8 @@ class _VaultTabState extends State<_VaultTab> {
     padding: const EdgeInsets.symmetric(vertical: 12),
     decoration: BoxDecoration(
       borderRadius: BorderRadius.circular(10),
-      border: Border.all(color: color.withValues(alpha: 0.3)),
-      color: color.withValues(alpha: 0.05),
+      border: Border.all(color: color.withValues(alpha: 0.35)),
+      color: color.withValues(alpha: 0.08),
     ),
     child: Row(
       mainAxisAlignment: MainAxisAlignment.center,
@@ -2542,8 +2526,8 @@ class _VendorSessionRow extends StatelessWidget {
               children: [
                 Text(
                   company,
-                  style: const TextStyle(
-                    color: Colors.white,
+                  style: TextStyle(
+                    color: AppColors.inkPrimary,
                     fontSize: 13,
                     fontWeight: FontWeight.w600,
                   ),
@@ -2551,8 +2535,8 @@ class _VendorSessionRow extends StatelessWidget {
                 const SizedBox(height: 2),
                 Text(
                   '$vendorUsername  ·  ${clearance.toUpperCase()}',
-                  style: const TextStyle(
-                    color: Color(0xFF475569),
+                  style: TextStyle(
+                    color: AppColors.inkFaint,
                     fontSize: 10,
                     letterSpacing: 0.4,
                   ),
@@ -2615,17 +2599,17 @@ class _VaultAction extends StatelessWidget {
   final VoidCallback onTap;
   final Color color;
 
-  const _VaultAction({
+  _VaultAction({
     required this.icon,
     required this.label,
     required this.subtitle,
     required this.onTap,
-    this.color = const Color(0xFF94A3B8),
-  });
+    Color? color,
+  }) : color = color ?? AppColors.inkFaint;
 
   @override
   Widget build(BuildContext context) {
-    final isDanger = color == const Color(0xFFEF4444);
+    final isDanger = color == AppColors.danger;
     return GestureDetector(
       onTap: onTap,
       behavior: HitTestBehavior.opaque,
@@ -2639,21 +2623,21 @@ class _VaultAction extends StatelessWidget {
               Text(
                 label,
                 style: TextStyle(
-                  color: isDanger ? const Color(0xFFEF4444) : Colors.white,
+                  color: isDanger ? AppColors.danger : AppColors.inkPrimary,
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
                 ),
               ),
               Text(
                 subtitle,
-                style: const TextStyle(color: Color(0xFF475569), fontSize: 11),
+                style: TextStyle(color: AppColors.inkFaint, fontSize: 11),
               ),
             ],
           ),
           const Spacer(),
           Icon(
             Icons.chevron_right,
-            color: const Color(0xFF475569).withValues(alpha: 0.5),
+            color: AppColors.inkFaint,
             size: 18,
           ),
         ],
@@ -2678,10 +2662,17 @@ class _PendingDeviceWatcher extends StatefulWidget {
 
 class _PendingDeviceWatcherState extends State<_PendingDeviceWatcher> {
   Timer? _timer;
-  final Set<String> _seenTokens = {}; // notified at all (device known or not)
-  final Set<String> _knownNotified =
-      {}; // already sent the Approve/Decline variant
   bool _firstLoad = true;
+
+  // token -> last known pending_device_ip ('' if not yet paired). A token
+  // present here but absent from the latest fetch means it's been handled
+  // (approved/declined-and-resolved) or expired — that's the cue to clean
+  // up its notification instead of letting it sit stale in the shade.
+  final Map<String, String> _lastIp = {};
+  final Map<String, String> _vendorNameByToken = {};
+
+  List<Map<String, dynamic>> _pendingList = [];
+  final Set<String> _actingTokens = {}; // in-flight approve/decline calls
 
   @override
   void initState() {
@@ -2705,58 +2696,228 @@ class _PendingDeviceWatcherState extends State<_PendingDeviceWatcher> {
       if (!mounted) return;
       if (res.statusCode != 200) return;
       final data = jsonDecode(res.body) as Map<String, dynamic>;
-      final newList = List<Map<String, dynamic>>.from(data['pending'] ?? []);
+      final rawList = List<Map<String, dynamic>>.from(data['pending'] ?? []);
 
-      if (_firstLoad) {
-        // Baseline whatever's already pending from before this app launch
-        // — otherwise any leftover request (or a backend that's slow to
-        // mark something expired) re-fires a notification on every single
-        // login instead of only for genuinely new ones.
-        for (final device in newList) {
-          final token = device['qr_token'] as String? ?? '';
-          if (token.isEmpty) continue;
-          _seenTokens.add(token);
-          final deviceIp = device['pending_device_ip'] as String? ?? '';
-          if (deviceIp.isNotEmpty) _knownNotified.add(token);
-        }
-        _firstLoad = false;
-        return;
-      }
+      // Only ever surface something once the vendor's laptop has actually
+      // been paired via QR — before that there's nothing for the admin to
+      // act on, and alerting earlier is exactly the premature "Pending..."
+      // notification that showed up before the device even existed.
+      final pairedList = rawList
+          .where((d) => (d['pending_device_ip'] as String? ?? '').isNotEmpty)
+          .toList();
+      if (mounted) setState(() => _pendingList = pairedList);
 
-      if (newList.isEmpty) return;
+      final currentTokens = <String>{};
 
-      // Fire an actionable OS notification for newly detected pending
-      // devices. Fired twice per session: once the instant the vendor
-      // knocks (Decline-only, the device isn't known yet), and again the
-      // instant their laptop is actually paired via QR (now with Approve
-      // too) — re-checked on device identity, not on first sight, so the
-      // second notification doesn't go missing in the dedup.
-      final adminUsername = await AuthService.getUsername() ?? 'admin';
-      for (final device in newList) {
+      for (final device in rawList) {
         final token = device['qr_token'] as String? ?? '';
         if (token.isEmpty) continue;
-        final deviceIp = device['pending_device_ip'] as String? ?? '';
-        final isFirstSight = !_seenTokens.contains(token);
-        final justPaired =
-            deviceIp.isNotEmpty && !_knownNotified.contains(token);
-        if (isFirstSight || justPaired) {
-          _seenTokens.add(token);
-          if (deviceIp.isNotEmpty) _knownNotified.add(token);
+        currentTokens.add(token);
+        final deviceIp   = device['pending_device_ip'] as String? ?? '';
+        final vendorName = device['vendor_username']   as String? ?? '';
+        _vendorNameByToken[token] = vendorName;
+
+        final previousIp = _lastIp[token];
+        // Fires on the transition into "paired" — including a *second*
+        // time for the same token, if a prior decline cleared the IP
+        // (previousIp == '') and the vendor re-scanned and got a new one.
+        // Only null (token never seen before) is exempt, and only on the
+        // very first poll after app launch, so a leftover pairing from
+        // before this session doesn't replay as a fresh alert.
+        final justPaired = deviceIp.isNotEmpty &&
+            (previousIp == null ? !_firstLoad : previousIp.isEmpty);
+        // Reverse transition — was paired, now isn't (declined elsewhere,
+        // or reset for some other reason) while the session itself is
+        // still listed. The alert now points at a device that's no longer
+        // pending, so it shouldn't keep sitting in the shade.
+        final justUnpaired = deviceIp.isEmpty &&
+            previousIp != null && previousIp.isNotEmpty;
+        _lastIp[token] = deviceIp;
+
+        if (justPaired) {
           NotificationService.showVendorDeviceAlert(
-            vendorName: device['vendor_username'] as String? ?? '',
-            company: device['company_name'] as String? ?? '',
-            deviceIp: deviceIp,
-            deviceMac: device['pending_device_mac'] as String? ?? '',
-            tokenHash: token,
-            adminUsername: adminUsername,
+            vendorName: vendorName,
+            company:    device['company_name'] as String? ?? '',
+            deviceIp:   deviceIp,
+            deviceMac:  device['pending_device_mac'] as String? ?? '',
           );
+        } else if (justUnpaired) {
+          NotificationService.cancelVendorDeviceAlert(vendorName);
         }
       }
+
+      // Clean up anything that dropped off the list entirely — approved,
+      // declined-and-gone, or expired — so no alert is ever left pointing
+      // at a request that can't be acted on anymore.
+      final droppedTokens =
+          _lastIp.keys.where((t) => !currentTokens.contains(t)).toList();
+      for (final t in droppedTokens) {
+        final vendorName = _vendorNameByToken.remove(t);
+        _lastIp.remove(t);
+        if (vendorName != null) {
+          NotificationService.cancelVendorDeviceAlert(vendorName);
+        }
+      }
+
+      _firstLoad = false;
     } catch (_) {}
   }
 
+  Future<void> _respond(Map<String, dynamic> device, bool approved) async {
+    final token = device['qr_token'] as String? ?? '';
+    if (token.isEmpty || _actingTokens.contains(token)) return;
+    setState(() => _actingTokens.add(token));
+    try {
+      final adminUsername = await AuthService.getUsername() ?? 'admin';
+      final deviceIp  = device['pending_device_ip']  as String? ?? '';
+      final deviceMac = device['pending_device_mac'] as String? ?? '';
+      final res = await http
+          .post(
+            Uri.parse(ApiConstants.approveVendorDeviceEndpoint),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'token_hash':     token,
+              'admin_username': adminUsername,
+              'approved':       approved,
+              if (deviceIp.isNotEmpty) 'override_ip': deviceIp,
+              if (deviceMac.isNotEmpty) 'override_mac': deviceMac,
+            }),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (!mounted) return;
+      if (res.statusCode == 200) {
+        // Don't wait for the next 4s poll to notice this is resolved —
+        // clear it immediately so the notification and card can't linger
+        // stale even for a moment, and so a decline-then-re-scan for the
+        // same vendor is correctly treated as fresh by _fetch().
+        final vendorName = device['vendor_username'] as String? ?? '';
+        _lastIp.remove(token);
+        _vendorNameByToken.remove(token);
+        NotificationService.cancelVendorDeviceAlert(vendorName);
+        setState(() => _pendingList.removeWhere(
+            (d) => (d['qr_token'] as String? ?? '') == token));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(approved ? 'Device approved.' : 'Device declined.'),
+          backgroundColor:
+              approved ? const Color(0xFF10B981) : const Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+        ));
+      } else {
+        String detail = 'Action failed.';
+        try {
+          detail = (jsonDecode(res.body) as Map<String, dynamic>)['detail']
+                  ?.toString() ??
+              detail;
+        } catch (_) {}
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(detail),
+          backgroundColor: const Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Could not reach the server — try again.'),
+          backgroundColor: Color(0xFFEF4444),
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } finally {
+      if (mounted) setState(() => _actingTokens.remove(token));
+    }
+  }
+
   @override
-  Widget build(BuildContext context) => const SizedBox.shrink();
+  Widget build(BuildContext context) {
+    if (_pendingList.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(24, 16, 24, 0),
+      child: Column(
+        children: _pendingList.map((device) {
+          final token    = device['qr_token'] as String? ?? '';
+          final deviceIp = device['pending_device_ip'] as String? ?? '';
+          final busy     = _actingTokens.contains(token);
+          return Container(
+            margin: const EdgeInsets.only(bottom: 12),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0D1421),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.orangeAccent.withValues(alpha: 0.4)),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    const Icon(Icons.devices_other,
+                        color: Colors.orangeAccent, size: 18),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Device Access Request',
+                      style: TextStyle(
+                        color: Colors.orangeAccent,
+                        fontWeight: FontWeight.w700,
+                        fontSize: 13,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  '${device['vendor_username'] ?? ''} (${device['company_name'] ?? ''})',
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w600, fontSize: 14),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  'IP: ${deviceIp.isNotEmpty ? deviceIp : "Pending..."}   '
+                  'MAC: ${(device['pending_device_mac'] as String? ?? '').isNotEmpty ? device['pending_device_mac'] : "Pending..."}',
+                  style: const TextStyle(color: Color(0xFFC0C7D4), fontSize: 12),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: (busy || deviceIp.isEmpty)
+                            ? null
+                            : () => _respond(device, true),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF10B981),
+                          disabledBackgroundColor:
+                              const Color(0xFF10B981).withValues(alpha: 0.3),
+                        ),
+                        child: busy
+                            ? const SizedBox(
+                                height: 16, width: 16,
+                                child: CircularProgressIndicator(
+                                    strokeWidth: 2, color: Colors.white))
+                            : const Text('Approve'),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: OutlinedButton(
+                        onPressed: busy ? null : () => _respond(device, false),
+                        style: OutlinedButton.styleFrom(
+                          foregroundColor: const Color(0xFFEF4444),
+                          side: const BorderSide(color: Color(0xFFEF4444)),
+                        ),
+                        child: const Text('Decline'),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 import '../services/auth_service.dart';
 import '../services/biometric_service.dart';
 import '../services/enclave_service.dart';
+import '../config/theme.dart';
 import '../config/transitions.dart';
+import '../widgets/theme_toggle_switch.dart';
 import 'admin_dashboard.dart';
 import 'sign_in_page.dart';
 
@@ -207,13 +209,13 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
     return showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: const Color(0xFF0D1421),
-        title: const Text('Sign-In Required', style: TextStyle(color: Colors.white)),
-        content: Text(message, style: const TextStyle(color: Color(0xFFC0C7D4))),
+        backgroundColor: AppColors.surface,
+        title: Text('Sign-In Required', style: TextStyle(color: AppColors.inkPrimary)),
+        content: Text(message, style: TextStyle(color: AppColors.inkSecondary)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('OK', style: TextStyle(color: Color(0xFF00C3FF))),
+            child: Text('OK', style: TextStyle(color: AppColors.brandBlue)),
           ),
         ],
       ),
@@ -222,11 +224,11 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
 
   // ── Helpers ───────────────────────────────────────────────────────────────
   Color get _color => switch (_status) {
-        _AuthStatus.success   => const Color(0xFF10B981),
-        _AuthStatus.failed    => const Color(0xFFEF4444),
-        _AuthStatus.unavailable => const Color(0xFF475569),
-        _AuthStatus.loggingIn => const Color(0xFF10B981),
-        _                     => const Color(0xFF00C3FF),
+        _AuthStatus.success   => AppColors.success,
+        _AuthStatus.failed    => AppColors.danger,
+        _AuthStatus.unavailable => AppColors.inkSecondary,
+        _AuthStatus.loggingIn => AppColors.success,
+        _                     => AppColors.brandBlue,
       };
 
   String get _statusLabel => switch (_status) {
@@ -255,17 +257,9 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
                            _status == _AuthStatus.success;
 
     return Scaffold(
-      backgroundColor: const Color(0xFF050810),
+      backgroundColor: AppColors.surfaceMuted,
       body: SizedBox.expand(
-        child: Container(
-          decoration: const BoxDecoration(
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: [Color(0xFF050810), Color(0xFF0A1628)],
-            ),
-          ),
-          child: SafeArea(
+        child: SafeArea(
             child: Column(
               children: [
                 // ── Brand mark ───────────────────────────────────────────
@@ -274,7 +268,7 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
                   child: Text(
                     'AEROGUARD',
                     style: TextStyle(
-                      color: const Color(0xFF475569).withValues(alpha: 0.5),
+                      color: AppColors.inkFaint,
                       fontSize: h * 0.013,
                       letterSpacing: 4.5,
                       fontWeight: FontWeight.w600,
@@ -289,23 +283,30 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
                     padding: const EdgeInsets.symmetric(
                         horizontal: 14, vertical: 5),
                     decoration: BoxDecoration(
-                      color: const Color(0xFF00C3FF).withValues(alpha: 0.07),
+                      color: AppColors.brandBlue.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(20),
                       border: Border.all(
-                        color: const Color(0xFF00C3FF).withValues(alpha: 0.2),
+                        color: AppColors.brandBlue.withValues(alpha: 0.3),
                       ),
                     ),
                     child: Text(
                       _savedUsername,
                       style: TextStyle(
-                        color: const Color(0xFF00C3FF).withValues(alpha: 0.8),
-                        fontSize: h * 0.013,
+                        color: AppColors.brandBlue,
+                        fontSize: 13,
                         letterSpacing: 1.0,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
                   ),
                 ],
+
+                // ── Theme toggle ─────────────────────────────────────────
+                // Placed here, centered, right below the saved-user chip —
+                // the first frame the user actually looks at once the intro
+                // video/loading hands off.
+                SizedBox(height: h * 0.014),
+                const Center(child: ThemeToggleSwitch(scale: 1.4)),
 
                 const Spacer(flex: 7),
 
@@ -345,7 +346,7 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
                     key: ValueKey(_status),
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: _color.withValues(alpha: 0.75),
+                      color: _color.withValues(alpha: 0.9),
                       fontSize: h * 0.016,
                       letterSpacing: 0.3,
                       fontWeight: FontWeight.w400,
@@ -371,7 +372,7 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
                                       .withValues(alpha: 0.4),
                                 ),
                                 color: const Color(0xFFEF4444)
-                                    .withValues(alpha: 0.06),
+                                    .withValues(alpha: 0.08),
                               ),
                               child: Row(
                                 mainAxisSize: MainAxisSize.min,
@@ -445,7 +446,6 @@ class _BiometricAuthScreenState extends State<BiometricAuthScreen>
             ),
           ),
         ),
-      ),
     );
   }
 }
@@ -493,7 +493,7 @@ class _FingerprintBadge extends StatelessWidget {
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   border: Border.all(
-                    color: color.withValues(alpha: pulseOpacity.value * 0.18),
+                    color: color.withValues(alpha: pulseOpacity.value * 0.4),
                     width: 1,
                   ),
                 ),
@@ -508,12 +508,12 @@ class _FingerprintBadge extends StatelessWidget {
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(
-                  color: color.withValues(alpha: 0.12 + glowAnim.value * 0.16),
+                  color: color.withValues(alpha: 0.22 + glowAnim.value * 0.22),
                   width: 1.5,
                 ),
                 boxShadow: [
                   BoxShadow(
-                    color: color.withValues(alpha: 0.04 + glowAnim.value * 0.1),
+                    color: color.withValues(alpha: 0.08 + glowAnim.value * 0.14),
                     blurRadius: 20,
                     spreadRadius: 2,
                   ),
@@ -526,7 +526,7 @@ class _FingerprintBadge extends StatelessWidget {
             width:  innerSize,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
-              color: color.withValues(alpha: 0.06),
+              color: color.withValues(alpha: 0.10),
               border: Border.all(
                 color: color.withValues(alpha: 0.45),
                 width: 1.5,

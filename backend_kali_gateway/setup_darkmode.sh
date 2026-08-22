@@ -20,6 +20,12 @@ POCKET_SUBNET="${POCKET_SUBNET:-192.168.100.0/24}"
 # Auto-detect default interface if not overridden (handles eth0, wlan0, etc.)
 GATEWAY_IFACE="${GATEWAY_INTERFACE:-$(ip route show default 2>/dev/null | awk '/default/ {print $5; exit}')}"
 GATEWAY_IFACE="${GATEWAY_IFACE:-eth0}"
+# The "Aeroguard-internal" NIC facing the FIDS VM — auto-detected by which
+# interface actually carries an IP on FIDS_HOST's /24, so this doesn't
+# silently break if the guest ever renumbers past eth1.
+FIDS_HOST="${FIDS_HOST:-10.66.100.150}"
+FIDS_IFACE="${FIDS_INTERFACE:-$(ip -4 -o addr show 2>/dev/null | awk -v subnet="${FIDS_HOST%.*}." '$4 ~ "^"subnet {print $2; exit}')}"
+FIDS_IFACE="${FIDS_IFACE:-eth1}"
 KNOCK_PORT=8000
 UDP_PORT=7777
 
@@ -34,6 +40,7 @@ echo "  ║   AeroGuard ZTNA — SPA Firewall Setup           ║"
 echo "  ╚══════════════════════════════════════════════════╝"
 echo ""
 echo "  Interface     : $GATEWAY_IFACE"
+echo "  FIDS iface    : $FIDS_IFACE ($FIDS_HOST)"
 echo "  Pocket subnet : $POCKET_SUBNET"
 echo "  SPA UDP port  : $UDP_PORT"
 echo "  Gateway port  : $KNOCK_PORT"
@@ -95,6 +102,14 @@ iptables -t nat -A POSTROUTING \
 
 # NAT for laptop traffic routed through Kali (ping, nmap, internet)
 iptables -t nat -A POSTROUTING -o "$GATEWAY_IFACE" -j MASQUERADE
+
+# NAT for laptop → FIDS traffic routed out the internal NIC. Without this,
+# spa_sniffer.py's per-laptop DNAT to $FIDS_HOST:$FIDS_PORT forwards the
+# packet with the laptop's own source IP intact — which FIDS's own ufw
+# rule (ALLOW 3000/tcp FROM the gateway's internal IP only) then silently
+# drops, since it never sees a source IP it trusts. MASQUERADE rewrites it
+# to this gateway's own $FIDS_IFACE address, matching what FIDS expects.
+iptables -t nat -A POSTROUTING -o "$FIDS_IFACE" -j MASQUERADE
 
 # Allow return / established traffic through FORWARD chain (stateful)
 iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT

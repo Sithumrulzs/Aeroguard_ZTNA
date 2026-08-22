@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import '../config/api_constants.dart';
+import '../config/theme.dart';
 
 // ── Tuning ──────────────────────────────────────────────────────────────
 // How often the feed re-polls the backend. Faster than the other dashboard
@@ -103,13 +104,7 @@ class _KnockHistoryTabState extends State<KnockHistoryTab> {
   @override
   Widget build(BuildContext context) {
     return Container(
-      decoration: const BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topCenter,
-          end: Alignment.bottomCenter,
-          colors: [Color(0xFF050810), Color(0xFF0A1628)],
-        ),
-      ),
+      color: AppColors.surfaceMuted,
       child: SafeArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -119,22 +114,22 @@ class _KnockHistoryTabState extends State<KnockHistoryTab> {
               child: Row(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  const Column(
+                  Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
                         'KNOCK HISTORY',
                         style: TextStyle(
-                          color: Colors.white,
+                          color: AppColors.inkPrimary,
                           fontSize: 17,
                           fontWeight: FontWeight.bold,
                           letterSpacing: 1.5,
                         ),
                       ),
-                      SizedBox(height: 2),
+                      const SizedBox(height: 2),
                       Text(
                         'Admin & vendor access log',
-                        style: TextStyle(color: Color(0x4DFFFFFF), fontSize: 10, letterSpacing: 1.5),
+                        style: TextStyle(color: AppColors.inkFaint, fontSize: 10, letterSpacing: 1.5),
                       ),
                     ],
                   ),
@@ -191,13 +186,13 @@ class _KnockHistoryTabState extends State<KnockHistoryTab> {
 
   Widget _buildList(BuildContext context) {
     if (_loading) {
-      return const Center(
+      return Center(
         child: SizedBox(
           height: 26,
           width: 26,
           child: CircularProgressIndicator(
             strokeWidth: 1.5,
-            valueColor: AlwaysStoppedAnimation<Color>(Color(0xFF00C3FF)),
+            valueColor: AlwaysStoppedAnimation<Color>(AppColors.brandBlue),
           ),
         ),
       );
@@ -213,14 +208,14 @@ class _KnockHistoryTabState extends State<KnockHistoryTab> {
             children: [
               Icon(
                 _error ? Icons.wifi_off_outlined : Icons.history_toggle_off,
-                color: const Color(0xFF475569),
+                color: AppColors.inkFaint,
                 size: 28,
               ),
               const SizedBox(height: 12),
               Text(
                 _error ? 'Unable to load history.' : 'No knock activity yet.',
                 textAlign: TextAlign.center,
-                style: const TextStyle(color: Color(0xFF475569), fontSize: 13),
+                style: TextStyle(color: AppColors.inkFaint, fontSize: 13),
               ),
             ],
           ),
@@ -231,8 +226,8 @@ class _KnockHistoryTabState extends State<KnockHistoryTab> {
     final items = _groupByDay(filtered);
 
     return RefreshIndicator(
-      color: const Color(0xFF00C3FF),
-      backgroundColor: const Color(0xFF0D1421),
+      color: AppColors.brandBlue,
+      backgroundColor: AppColors.surface,
       onRefresh: _fetch,
       child: ListView.builder(
         padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
@@ -244,8 +239,8 @@ class _KnockHistoryTabState extends State<KnockHistoryTab> {
               padding: EdgeInsets.only(top: i == 0 ? 4 : 18, bottom: 8),
               child: Text(
                 item,
-                style: const TextStyle(
-                  color: Color(0xFF475569),
+                style: TextStyle(
+                  color: AppColors.inkFaint,
                   fontSize: 10,
                   fontWeight: FontWeight.w700,
                   letterSpacing: 2.0,
@@ -399,13 +394,10 @@ class _SummaryChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-          colors: [const Color(0xFF0D1B2E), const Color(0xFF080F1C)],
-        ),
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: color.withValues(alpha: 0.25)),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppColors.softShadow(tint: color, opacity: 0.08),
       ),
       child: Row(
         children: [
@@ -416,12 +408,12 @@ class _SummaryChip extends StatelessWidget {
             children: [
               Text(
                 '$value',
-                style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w800, height: 1.0),
+                style: TextStyle(color: AppColors.inkPrimary, fontSize: 20, fontWeight: FontWeight.w800, height: 1.0),
               ),
               const SizedBox(height: 2),
               Text(
                 label,
-                style: const TextStyle(color: Color(0xFF475569), fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.2),
+                style: TextStyle(color: AppColors.inkFaint, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.2),
               ),
             ],
           ),
@@ -480,18 +472,19 @@ class _ActivityChart extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
       decoration: BoxDecoration(
-        color: const Color(0xFF0D1421),
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        border: Border.all(color: AppColors.border),
+        boxShadow: AppColors.softShadow(opacity: 0.06),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              const Text(
+              Text(
                 'ACTIVITY · LAST 8H',
-                style: TextStyle(color: Color(0xFF475569), fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.5),
+                style: TextStyle(color: AppColors.inkFaint, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.5),
               ),
               const Spacer(),
               const _LegendDot(color: Color(0xFF10B981), label: 'Granted'),
@@ -520,7 +513,7 @@ class _ActivityChart extends StatelessWidget {
                   child: Text(
                     b.hour.hour.toString().padLeft(2, '0'),
                     textAlign: TextAlign.center,
-                    style: const TextStyle(color: Color(0xFF334155), fontSize: 8),
+                    style: TextStyle(color: AppColors.inkFaint, fontSize: 8),
                   ),
                 ),
                 if (b != buckets.last) const SizedBox(width: 6),
@@ -557,7 +550,7 @@ class _Bar extends StatelessWidget {
         child: Container(
           height: 2,
           decoration: BoxDecoration(
-            color: Colors.white.withValues(alpha: 0.06),
+            color: AppColors.border,
             borderRadius: BorderRadius.circular(1),
           ),
         ),
@@ -610,7 +603,7 @@ class _LegendDot extends StatelessWidget {
       children: [
         Container(height: 6, width: 6, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
         const SizedBox(width: 5),
-        Text(label, style: const TextStyle(color: Color(0xFF64748B), fontSize: 9)),
+        Text(label, style: TextStyle(color: AppColors.inkSecondary, fontSize: 9)),
       ],
     );
   }
@@ -628,9 +621,9 @@ class _FilterRow extends StatelessWidget {
   Widget build(BuildContext context) {
     return Row(
       children: [
-        _FilterChip(label: 'ALL', selected: filter == _ActorFilter.all, color: const Color(0xFF00C3FF), onTap: () => onChanged(_ActorFilter.all)),
+        _FilterChip(label: 'ALL', selected: filter == _ActorFilter.all, color: AppColors.brandBlue, onTap: () => onChanged(_ActorFilter.all)),
         const SizedBox(width: 8),
-        _FilterChip(label: 'ADMIN', selected: filter == _ActorFilter.admin, color: const Color(0xFF00C3FF), onTap: () => onChanged(_ActorFilter.admin)),
+        _FilterChip(label: 'ADMIN', selected: filter == _ActorFilter.admin, color: AppColors.brandBlue, onTap: () => onChanged(_ActorFilter.admin)),
         const SizedBox(width: 8),
         _FilterChip(label: 'VENDOR', selected: filter == _ActorFilter.vendor, color: Colors.orangeAccent, onTap: () => onChanged(_ActorFilter.vendor)),
       ],
@@ -653,14 +646,14 @@ class _FilterChip extends StatelessWidget {
         duration: const Duration(milliseconds: 200),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
-          color: selected ? color.withValues(alpha: 0.14) : Colors.white.withValues(alpha: 0.03),
+          color: selected ? color.withValues(alpha: 0.14) : AppColors.surface,
           borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: selected ? color.withValues(alpha: 0.5) : Colors.white.withValues(alpha: 0.08)),
+          border: Border.all(color: selected ? color.withValues(alpha: 0.5) : AppColors.border),
         ),
         child: Text(
           label,
           style: TextStyle(
-            color: selected ? color : const Color(0xFF64748B),
+            color: selected ? color : AppColors.inkSecondary,
             fontSize: 10,
             fontWeight: FontWeight.w700,
             letterSpacing: 1.2,
@@ -702,9 +695,9 @@ class _KnockRow extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: const Color(0xFF0A0F1A),
+        color: AppColors.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.05)),
+        border: Border.all(color: AppColors.border),
       ),
       child: Row(
         children: [
@@ -732,7 +725,7 @@ class _KnockRow extends StatelessWidget {
                       child: Text(
                         username,
                         overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(color: Colors.white, fontSize: 13, fontWeight: FontWeight.w700),
+                        style: TextStyle(color: AppColors.inkPrimary, fontSize: 13, fontWeight: FontWeight.w700),
                       ),
                     ),
                     const SizedBox(width: 8),
@@ -754,7 +747,7 @@ class _KnockRow extends StatelessWidget {
                   Text(
                     subtitleParts.join('  ·  '),
                     overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(color: Color(0xFF475569), fontSize: 10.5),
+                    style: TextStyle(color: AppColors.inkFaint, fontSize: 10.5),
                   ),
                 ],
               ],

@@ -7,10 +7,11 @@ LAN to fake.
 """
 
 import tkinter as tk
-from tkinter import scrolledtext
+from tkinter import scrolledtext, messagebox
 import tkinter.font as tkfont
-import threading, sqlite3, os, sys, datetime, webbrowser, time, math
-import urllib.request, urllib.error, json, secrets, socket, uuid
+import threading, sqlite3, os, sys, datetime, webbrowser, time, math, traceback
+import urllib.request, urllib.error, urllib.parse, json, secrets, socket, uuid
+import http.cookiejar
 import pystray
 import qrcode
 from PIL import Image, ImageTk, ImageDraw, ImageFilter
@@ -23,8 +24,16 @@ GATEWAY_PORT          = 8000
 TERMINAL_SESSION_URL  = f"http://{GATEWAY_HOST}:{GATEWAY_PORT}/api/v1/terminal-session"
 POLL_INTERVAL_SECONDS = 3
 REVOKE_MISS_THRESHOLD = 3   # consecutive failed polls before treating as a real revoke
-FIDS_HOST            = "127.0.0.1"
-FIDS_PORT            = 5000
+
+# FIDS (cmb-ops-console) lives on its own dedicated VM, on an isolated
+# internal link this laptop has no route to at all — so despite the app
+# actually running elsewhere, this laptop must target the GATEWAY's own
+# LAN address, not FIDS's real one. Once this laptop is granted, the
+# gateway DNATs FIDS_PORT on its own LAN IP through to the real FIDS host
+# (see spa_sniffer.py's _inject_laptop) — FIDS itself is unreachable any
+# other way. Repoint via env vars if the gateway's LAN address changes.
+FIDS_HOST            = os.environ.get("FIDS_HOST", GATEWAY_HOST)
+FIDS_PORT            = int(os.environ.get("FIDS_PORT", "3000"))
 FIDS_URL             = f"http://{FIDS_HOST}:{FIDS_PORT}"
 
 # This exe is identical for every vendor — it never knows in advance which
@@ -47,6 +56,21 @@ def resource_path(rel_path):
     """Resolve bundled assets — works both as a script and as a PyInstaller exe."""
     base = getattr(sys, "_MEIPASS", _here)
     return os.path.join(base, rel_path)
+
+def log_crash(context):
+    """This build runs windowed (console=False, see the .spec) so there is
+    no console for an uncaught exception's traceback to print to — it
+    would otherwise vanish completely, leaving "nothing happened" as the
+    only symptom anyone ever sees. Call from inside an `except` block;
+    writes next to the exe/script so it's discoverable without a special
+    debug rebuild."""
+    try:
+        path = os.path.join(_here, "aeroguard_terminal_error.log")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(f"\n[{datetime.datetime.now().isoformat()}] {context}\n")
+            f.write(traceback.format_exc())
+    except Exception:
+        pass
 
 ICON_PNG = resource_path(os.path.join("assets", "aeroguard_icon.png"))
 ICON_ICO = resource_path(os.path.join("assets", "aeroguard.ico"))
@@ -241,10 +265,64 @@ def db_query(sql, params=()):
     except Exception as e:
         return None, str(e)
 
-def fids_get(endpoint):
+# ── FIDS SSO ──────────────────────────────────────────────────────────────
+# cmb-ops-console is cookie-session based, so a shared cookie jar/opener is
+# reused across every FIDS request in this process — one successful
+# /api/sso-login and every fids_get() after it rides the same session,
+# no re-login per call.
+_fids_cookies = http.cookiejar.CookieJar()
+_fids_opener  = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(_fids_cookies))
+
+# The gateway mints a fresh SSO token on every successful terminal-session
+# poll (every few seconds, see TrayApp._poll_once) — kept here so whichever
+# code needs one (the boot-time login attempt, or "show fids" opening a
+# browser) always has one still comfortably inside its ~120s TTL, not a
+# stale snapshot from the moment the session was first granted.
+_fids_token_lock  = threading.Lock()
+_fids_token_state = {"value": None}
+
+def _set_fids_token(token):
+    with _fids_token_lock:
+        _fids_token_state["value"] = token
+
+def _get_fids_token():
+    with _fids_token_lock:
+        return _fids_token_state["value"]
+
+def fids_sso_login(token):
+    """
+    Redeems a gateway-minted SSO token for a cmb-ops-console session
+    cookie — no password involved. Only succeeds if the token's signature
+    matches the FIDS_SSO_SECRET this FIDS instance was configured with
+    (must be the same value as backend_kali_gateway's .env).
+    """
+    if not token:
+        return False
     try:
-        req = urllib.request.urlopen(f"{FIDS_URL}{endpoint}", timeout=4)
-        return json.loads(req.read().decode()), None
+        body = json.dumps({"token": token}).encode()
+        req = urllib.request.Request(
+            f"{FIDS_URL}/api/sso-login", data=body,
+            headers={"Content-Type": "application/json"}, method="POST")
+        resp = _fids_opener.open(req, timeout=6)
+        return bool(json.loads(resp.read().decode()).get("ok"))
+    except Exception as e:
+        print(f"[-] FIDS SSO login failed: {e}")
+        return False
+
+def fids_get(endpoint, _retried=False):
+    try:
+        resp = _fids_opener.open(f"{FIDS_URL}{endpoint}", timeout=4)
+        return json.loads(resp.read().decode()), None
+    except urllib.error.HTTPError as e:
+        if e.code == 401 and not _retried:
+            # Session cookie missing/expired — try once to (re)establish it
+            # with whatever SSO token is currently cached, then retry.
+            token = _get_fids_token()
+            if token and fids_sso_login(token):
+                return fids_get(endpoint, _retried=True)
+            return None, ("FIDS session not authenticated — SSO login failed. "
+                          "Check FIDS_SSO_SECRET matches on both sides.")
+        return None, f"FIDS error: HTTP {e.code}"
     except urllib.error.URLError as e:
         return None, f"FIDS unreachable: {e.reason}"
     except Exception as e:
@@ -264,6 +342,33 @@ def poll_session():
         return None
 
 def _own_mac():
+    """
+    The MAC that actually matters is whichever adapter is being used to
+    reach the gateway — not just "a" MAC. uuid.getnode() picks an
+    essentially arbitrary adapter on a multi-NIC machine (WiFi + Ethernet
+    + VPN + Bluetooth + virtual adapters are all normal on a real laptop),
+    which can silently differ from the one the gateway's own ARP scan sees
+    on its LAN. That mismatch is exactly how a laptop whose *correct*
+    adapter MAC is properly registered as admin (and gets a real ARP-based
+    grant from the gateway) can still self-report the wrong MAC here,
+    have is_admin_laptop() correctly say "no" for a MAC nobody actually
+    registered, and fall into vendor-style QR pairing instead of opening
+    straight to the terminal.
+    """
+    local_ip = _own_local_ip()
+    if local_ip and local_ip != "127.0.0.1":
+        try:
+            import psutil
+            for addrs in psutil.net_if_addrs().values():
+                ips  = [a.address for a in addrs if a.family == socket.AF_INET]
+                macs = [a.address for a in addrs if a.family == psutil.AF_LINK]
+                if local_ip in ips and macs:
+                    return macs[0].lower().replace("-", ":")
+        except Exception:
+            pass
+    # Fallback only — same arbitrary-adapter risk as above, used purely so
+    # this never raises outright if psutil is unavailable or the interface
+    # lookup fails for some other reason.
     node = uuid.getnode()
     return ":".join(f"{(node >> shift) & 0xff:02x}" for shift in range(40, -1, -8))
 
@@ -310,7 +415,14 @@ def register_pairing(pairing_code):
         REGISTER_PAIRING_URL, data=body,
         headers={"Content-Type": "application/json"}, method="POST")
     try:
-        urllib.request.urlopen(req, timeout=8)
+        # central_auth runs on a free-tier host that spins down after ~15
+        # minutes idle — the next request has to cold-start it, which can
+        # take well past a short timeout. A too-short timeout here doesn't
+        # just fail this one call: it leaves the QR currently on screen
+        # encoding a pairing_code the server has never heard of, so a
+        # vendor who scans it gets a bogus "not found" error for a code
+        # that in fact exists, just hasn't finished registering.
+        urllib.request.urlopen(req, timeout=45)
         return True
     except Exception as e:
         print(f"[-] Pairing registration failed: {e}")
@@ -328,8 +440,21 @@ class AeroGuardTerminal:
 
         self.root.title(f"AeroGuard ZTNA  |  {session['user']}")
         self.root.configure(bg=BG)
-        self.root.geometry("1320x840")
-        self.root.minsize(960, 600)
+
+        # A normal cmd-sized window, not maximized — but still clamped to
+        # the actual screen size and margin-padded (not just a fixed
+        # 900x600), which is what actually fixed the original bug: a
+        # literal fixed size could run taller than the screen's usable
+        # work area (varies with taskbar height, DPI scaling, etc.),
+        # pushing the bottom input row under the taskbar with no way to
+        # reach it. Sizing off the real screen dimensions with margin
+        # keeps that fixed while no longer forcing fullscreen.
+        self.root.minsize(760, 480)
+        self.root.update_idletasks()
+        sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        w, h = min(900, sw - 80), min(600, sh - 120)
+        x, y = (sw - w) // 2, (sh - h) // 2
+        self.root.geometry(f"{w}x{h}+{x}+{y}")
         try:
             self.root.iconbitmap(ICON_ICO)
         except Exception:
@@ -400,7 +525,44 @@ class AeroGuardTerminal:
         self.shadow_canvas.pack(fill="x")
         self.shadow_canvas.bind("<Configure>", self._on_shadow_resize)
 
+        # ── SEPARATOR + INPUT ROW ────────────────
+        # Packed *before* the output area below, both with side="bottom" —
+        # pack() allocates cavity space in packing order, so an
+        # expand=True widget packed first (as the output area used to be)
+        # greedily claims the entire remaining cavity right then, leaving
+        # nothing for anything packed afterward regardless of its side.
+        # That was the actual bug: the input row was never being given any
+        # space to render in at all, not just hidden behind something —
+        # bottom-anchored widgets have to reserve their space first.
+        tk.Frame(self.root, bg="#123247", height=2).pack(side="bottom", fill="x")
+
+        inp = tk.Frame(self.root, bg=BG, pady=6)
+        inp.pack(fill="x", side="bottom")
+
+        tk.Label(inp, text=" aeroguard",
+                 fg=FG, bg=BG, font=FONT_B).pack(side="left")
+        tk.Label(inp, text=":~$ ",
+                 fg=FG_YELLOW, bg=BG, font=FONT_B).pack(side="left")
+
+        self.ivar = tk.StringVar()
+        self.ibox = tk.Entry(
+            inp, textvariable=self.ivar,
+            bg=BG, fg=FG,
+            insertbackground=CURSOR,
+            font=FONT,
+            relief="flat",
+            highlightthickness=0, bd=0
+        )
+        self.ibox.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.ibox.bind("<Return>", self._enter)
+        self.ibox.bind("<Up>",     self._hist_up)
+        self.ibox.bind("<Down>",   self._hist_dn)
+        self.ibox.focus_set()
+
         # ── OUTPUT AREA ─────────────────────────
+        # Packed last so it absorbs whatever cavity space remains after
+        # the header/shadow (top) and separator/input row (bottom) have
+        # already claimed theirs.
         self.out = scrolledtext.ScrolledText(
             self.root,
             bg=BG, fg=FG,
@@ -429,33 +591,6 @@ class AeroGuardTerminal:
         self.out.tag_config("white",  foreground=FG_WHITE)
         self.out.tag_config("cyan",   foreground=FG_CYAN)
         self.out.tag_config("sec",    foreground=FG,       font=FONT_B)
-
-        # ── SEPARATOR ───────────────────────────
-        tk.Frame(self.root, bg="#123247", height=2).pack(fill="x")
-
-        # ── INPUT ROW ───────────────────────────
-        inp = tk.Frame(self.root, bg=BG, pady=6)
-        inp.pack(fill="x", side="bottom")
-
-        tk.Label(inp, text=" aeroguard",
-                 fg=FG, bg=BG, font=FONT_B).pack(side="left")
-        tk.Label(inp, text=":~$ ",
-                 fg=FG_YELLOW, bg=BG, font=FONT_B).pack(side="left")
-
-        self.ivar = tk.StringVar()
-        self.ibox = tk.Entry(
-            inp, textvariable=self.ivar,
-            bg=BG, fg=FG,
-            insertbackground=CURSOR,
-            font=FONT,
-            relief="flat",
-            highlightthickness=0, bd=0
-        )
-        self.ibox.pack(side="left", fill="x", expand=True, padx=(0, 10))
-        self.ibox.bind("<Return>", self._enter)
-        self.ibox.bind("<Up>",     self._hist_up)
-        self.ibox.bind("<Down>",   self._hist_dn)
-        self.ibox.focus_set()
 
     # ─────────────────────────────────────────────
     def _tick(self):
@@ -528,7 +663,10 @@ class AeroGuardTerminal:
         self.wl(f"  [FIDS]  Connecting to {FIDS_URL} ...", "dim")
 
         def _chk():
-            data, err = fids_get("/api/summary")
+            token = _get_fids_token()
+            if token:
+                fids_sso_login(token)   # best-effort — fids_get() retries once anyway
+            data, err = fids_get("/api/kpis")
             if data:
                 self.root.after(0, lambda: (
                     self.wl("  [FIDS]  Dashboard ..................... ONLINE", "ok"),
@@ -634,7 +772,7 @@ class AeroGuardTerminal:
         elif cmd == "baggage":
             f = args[0] if args else None
             threading.Thread(target=self._baggage, args=(f,), daemon=True).start()
-        elif lo in ("open fids", "fids open"):
+        elif lo in ("open fids", "fids open", "show fids"):
             self._ui(self._open_fids)
         elif lo == "fids status":
             threading.Thread(target=self._fids_status, daemon=True).start()
@@ -689,7 +827,8 @@ class AeroGuardTerminal:
                 ("baggage issues",   "Show missing / delayed bags"),
             ]),
             ("FIDS DASHBOARD", [
-                ("open fids",        "Open FIDS dashboard in browser"),
+                ("show fids",        "Open FIDS dashboard in browser"),
+                ("open fids",        "Alias for  show fids"),
                 ("fids status",      "Check FIDS connection"),
                 ("fids flights",     "Pull live flights from FIDS API"),
                 ("fids summary",     "Pull live summary from FIDS API"),
@@ -951,16 +1090,22 @@ class AeroGuardTerminal:
     #  FIDS
     # ─────────────────────────────────────────────
     def _open_fids(self):
+        # With a cached SSO token, open the browser straight into a signed-in
+        # session (cmb-ops-console's GET /sso) instead of dropping the user
+        # on its login page — same verified identity, no second password.
+        token = _get_fids_token()
+        url = f"{FIDS_URL}/sso?token={urllib.parse.quote(token)}" if token else FIDS_URL
         self.wl(f"  Opening FIDS dashboard -> {FIDS_URL}", "cyan")
         try:
-            webbrowser.open(FIDS_URL)
-            self.wl("  Browser launched.", "ok")
+            webbrowser.open(url)
+            self.wl("  Browser launched." if token else
+                    "  Browser launched (no SSO token cached — log in manually).", "ok")
         except Exception as e:
             self.wl(f"  Failed: {e}", "err")
         self.wl()
 
     def _fids_status(self):
-        data, err = fids_get("/api/summary")
+        data, err = fids_get("/api/kpis")
         def _d():
             self.wl("  FIDS STATUS", "sec")
             self.sep(40)
@@ -968,18 +1113,15 @@ class AeroGuardTerminal:
                 self.w("  Status  : ", "dim"); self.wl("OFFLINE", "err")
                 self.w("  Error   : ", "dim"); self.wl(err, "err")
             else:
-                a = data.get("assets",  {})
-                f = data.get("flights", {})
-                self.w("  Status   : ", "dim"); self.wl("ONLINE", "ok")
-                self.w("  URL      : ", "dim"); self.wl(FIDS_URL, "white")
-                self.w("  Assets   : ", "dim")
-                self.wl(f"{a.get('total',0)} total | "
-                        f"{a.get('online',0)} online | "
-                        f"{a.get('offline',0)} offline", "white")
-                self.w("  Flights  : ", "dim")
-                self.wl(f"{f.get('total',0)} total | "
-                        f"{f.get('boarding',0)} boarding | "
-                        f"{f.get('delayed',0)} delayed", "white")
+                self.w("  Status        : ", "dim"); self.wl("ONLINE", "ok")
+                self.w("  URL           : ", "dim"); self.wl(FIDS_URL, "white")
+                self.w("  Flights Today : ", "dim"); self.wl(str(data.get("flightsToday", 0)), "white")
+                self.w("  On-Time %     : ", "dim"); self.wl(f"{data.get('otp', '?')}%", "white")
+                self.w("  Delayed       : ", "dim"); self.wl(str(data.get("delayed", 0)), "white")
+                self.w("  Cancelled     : ", "dim"); self.wl(str(data.get("cancelled", 0)), "white")
+                self.w("  Gates         : ", "dim")
+                self.wl(f"{data.get('gatesOccupied', 0)}/{data.get('gatesTotal', 0)} occupied", "white")
+                self.w("  Unack Alerts  : ", "dim"); self.wl(str(data.get("unackAlerts", 0)), "white")
             self.sep(40)
             self.wl()
         self._ui(_d)
@@ -990,35 +1132,42 @@ class AeroGuardTerminal:
             if err: self.wl(f"  error: {err}", "err"); self.wl(); return
             self.wl(f"  FIDS -- LIVE FLIGHTS  ({len(data)} records)", "sec")
             self.sep()
-            self.w(f"  {'FLIGHT':<10}", "hdr"); self.w(f"{'AIRLINE':<22}", "hdr")
-            self.w(f"{'GATE':<7}", "hdr");  self.w(f"{'DESTINATION':<16}", "hdr")
-            self.w(f"{'DEPART':<9}", "hdr"); self.w(f"{'PAX':<6}", "hdr")
+            self.w(f"  {'FLIGHT':<9}", "hdr"); self.w(f"{'AIRLINE':<9}", "hdr")
+            self.w(f"{'TYPE':<6}", "hdr");  self.w(f"{'TIME':<7}", "hdr")
+            self.w(f"{'GATE':<7}", "hdr");  self.w(f"{'CITY':<18}", "hdr")
             self.wl("STATUS", "hdr")
             self.sep()
             for f in data:
-                st  = f["boarding_status"]
-                tag = ("ok"   if st == "On Time" else
-                       "warn" if st == "Boarding" else
-                       "err"  if st == "Delayed"  else "white")
-                self.wl(f"  {f['flight_no']:<10}{f['airline']:<22}"
-                        f"{f['gate_no']:<7}{f['destination']:<16}"
-                        f"{f['departure_time']:<9}{f['passenger_count']:<6}{st}", tag)
+                st  = f.get("st", "")
+                tag = ("ok"   if st == "ontime" else
+                       "warn" if st in ("boarding", "final", "gatechange") else
+                       "err"  if st in ("delayed", "cancelled") else "white")
+                self.wl(f"  {f.get('fl',''):<9}{f.get('al',''):<9}"
+                        f"{f.get('type','').upper():<6}{f.get('t',''):<7}"
+                        f"{f.get('gate',''):<7}{f.get('city',''):<18}{st}", tag)
             self.sep()
             self.wl()
         self._ui(_d)
 
     def _fids_summary(self):
-        data, err = fids_get("/api/summary")
+        kpis,    err1 = fids_get("/api/kpis")
+        reports, err2 = fids_get("/api/reports")
         def _d():
+            err = err1 or err2
             if err: self.wl(f"  error: {err}", "err"); self.wl(); return
             self.wl("  FIDS -- LIVE SUMMARY", "sec")
             self.sep(50)
-            for section, vals in data.items():
-                self.wl(f"  [{section.upper()}]", "hdr")
-                for k, v in vals.items():
-                    self.w(f"    {k:<24}: ", "dim")
-                    self.wl(str(v), "white")
-                self.wl()
+            self.wl("  [KPIS]", "hdr")
+            for k, v in kpis.items():
+                self.w(f"    {k:<24}: ", "dim"); self.wl(str(v), "white")
+            self.wl()
+            self.wl("  [STATUS BREAKDOWN]", "hdr")
+            for k, v in reports.get("byStatus", {}).items():
+                self.w(f"    {k:<24}: ", "dim"); self.wl(str(v), "white")
+            self.wl()
+            self.wl("  [AIRLINE BREAKDOWN]", "hdr")
+            for k, v in reports.get("byAirline", {}).items():
+                self.w(f"    {k:<24}: ", "dim"); self.wl(str(v), "white")
             self.sep(50)
             self.wl()
         self._ui(_d)
@@ -1239,6 +1388,7 @@ class TrayApp:
         self._miss_count   = 0
         self.pairing_code  = None
         self.pairing_win   = None    # stays None entirely on admin laptops
+        self._crash_shown  = False   # only pop the error dialog once per run
 
         root.withdraw()                 # silent from the first frame
         try:
@@ -1273,9 +1423,19 @@ class TrayApp:
     #    before the vendor ever gets a chance to scan it ──────────────
     def _start_pairing_refresh(self):
         def _loop():
+            # The QR is on screen and scannable the instant the pairing
+            # window opens, but the code isn't actually usable until this
+            # first registration lands. If it fails (e.g. the server was
+            # cold and even the 45s timeout above wasn't enough), retry
+            # quickly rather than leaving a dead code on display for up to
+            # 5 minutes before the next attempt.
+            for _ in range(6):
+                if register_pairing(self.pairing_code):
+                    break
+                time.sleep(10)
             while True:
-                register_pairing(self.pairing_code)
                 time.sleep(300)
+                register_pairing(self.pairing_code)
         threading.Thread(target=_loop, daemon=True).start()
 
     # ── system tray icon ─────────────────────────
@@ -1323,9 +1483,26 @@ class TrayApp:
             self.root.after(0, self._bring_to_front)
 
     def _bring_to_front(self):
+        # deiconify()+lift()+focus_force() alone is unreliable on Windows:
+        # SetForegroundWindow-style focus steals from a background process
+        # are routinely blocked by the OS foreground-lock, so the window
+        # can end up genuinely open — just sitting behind whatever else
+        # has focus, which looks identical to "never popped up" from the
+        # user's side. Briefly forcing -topmost bypasses that (topmost
+        # placement isn't subject to the same block) and then releasing it
+        # right after leaves the window in the normal stacking order
+        # instead of permanently pinned above everything.
         self.root.deiconify()
+        self.root.attributes("-topmost", True)
         self.root.lift()
         self.root.focus_force()
+        # focus_force() above only makes the toplevel itself the foreground
+        # window — it does not restore keyboard focus to the input Entry,
+        # so without this the window looks fully open but every keystroke
+        # goes nowhere (focus is stuck on the root, which accepts no text).
+        if self.terminal is not None:
+            self.terminal.ibox.focus_set()
+        self.root.after(250, lambda: self.root.attributes("-topmost", False))
 
     def _quit(self, icon, item):
         icon.stop()
@@ -1341,6 +1518,10 @@ class TrayApp:
         active = bool(data and data.get("active"))
 
         if active:
+            # Refreshed every poll (not just at grant time) so a token is
+            # always available well within its short TTL, whether it ends
+            # up used by the boot-time FIDS login or a later "show fids".
+            _set_fids_token(data.get("fids_sso_token"))
             self._miss_count = 0
             if self.terminal is None:
                 self.root.after(0, lambda: self._grant(data))
@@ -1370,11 +1551,32 @@ class TrayApp:
         }
 
         def _open_terminal():
-            for w in self.root.winfo_children():   # clear any leftover widgets
-                w.destroy()                          # from a prior revoked session
-            self.terminal = AeroGuardTerminal(self.root, session)
-            self._set_tray_status(f"Active — {session['user']}")
-            self._bring_to_front()
+            try:
+                for w in self.root.winfo_children():   # clear any leftover widgets
+                    w.destroy()                          # from a prior revoked session
+                self.terminal = AeroGuardTerminal(self.root, session)
+                self._set_tray_status(f"Active — {session['user']}")
+                self._bring_to_front()
+            except Exception:
+                # Otherwise this fails completely silently (console=False,
+                # see the .spec) — the gateway grant succeeded, polling
+                # keeps succeeding, and nothing ever visibly happens, which
+                # is indistinguishable from the terminal just not working.
+                log_crash("Failed to open terminal window on grant")
+                self.terminal = None
+                if not self._crash_shown:
+                    self._crash_shown = True
+                    try:
+                        messagebox.showerror(
+                            "AeroGuard ZTNA — Startup Error",
+                            "The terminal window failed to open after a "
+                            "successful gateway grant.\n\n"
+                            "Details were written to "
+                            "aeroguard_terminal_error.log, next to this "
+                            "program.",
+                        )
+                    except Exception:
+                        pass
 
         # First grant of this exe's life on a vendor-mode device: the
         # pairing window is still up, so play the green "approved" pulse
