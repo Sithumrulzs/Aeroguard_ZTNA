@@ -214,7 +214,16 @@ def _inject_laptop(laptop_ip: str):
 
 
 def _remove_laptop(laptop_ip: str):
-    """Revoke full network access for a laptop."""
+    """Revoke full network access for a laptop.
+
+    Deliberately silent — this is called speculatively (and safely/
+    idempotently) by the revocation watcher for any DB-revoked session
+    within the reconciliation window, whether or not this process still
+    has that IP tracked as active. Logging here would print a misleading
+    "session expired" line on every 20s poll for old, already-cleaned-up
+    sessions. Callers that know a real removal happened print/log it
+    themselves (see _schedule_laptop's natural-expiry path and the
+    revocation watcher's still_tracked check)."""
     subprocess.run(
         ["iptables", "-D", "INPUT", "-s", laptop_ip, "-j", "ACCEPT"],
         capture_output=True,
@@ -241,7 +250,6 @@ def _remove_laptop(laptop_ip: str):
     )
     _flush_conntrack(laptop_ip)
     _active_laptops.discard(laptop_ip)
-    print(f"[!] LAPTOP REMOVED  {laptop_ip} — session expired")
 
 
 def _schedule_laptop(laptop_ip: str, timeout: int, name: str):
@@ -256,6 +264,7 @@ def _schedule_laptop(laptop_ip: str, timeout: int, name: str):
             _remove_laptop(laptop_ip)
             _log("LAPTOP_EXPIRED", name, "EXPIRED", laptop_ip,
                  {"timeout_seconds": timeout})
+            print(f"[!] LAPTOP REMOVED  {laptop_ip} — session expired")
             with _lock:
                 _timers.pop(key, None)
 
