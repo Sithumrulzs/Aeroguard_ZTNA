@@ -14,6 +14,7 @@ from typing import Optional
 from dotenv import load_dotenv
 import psycopg2
 import psycopg2.extras
+import asyncio
 import bcrypt
 import json
 import os
@@ -27,6 +28,18 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 PORT         = int(os.getenv("PORT", "8001"))
 if not DATABASE_URL:
     raise RuntimeError("DATABASE_URL not set. Check backend_central_auth/.env")
+
+# Render's free tier spins this service down after ~15 minutes with no
+# inbound traffic; the next real request then pays a cold-start penalty
+# (client-side retries in the mobile app cover that case, but it's still
+# a multi-second wait every time it happens). Self-pinging the service's
+# own public health endpoint well inside that window keeps it looking
+# "busy" from Render's perspective, so it mostly never goes cold at all —
+# pinging localhost wouldn't work here since Render's idle detection is
+# based on actual inbound traffic reaching the service externally, not
+# internal process activity.
+SELF_URL           = os.getenv("SELF_URL", "https://aeroguard-ztna.onrender.com")
+KEEPALIVE_SECONDS   = 600
 
 # ── Database connection ───────────────────────────────────────────────────────
 @contextmanager
@@ -56,6 +69,23 @@ def insert_audit(event_type: str, username: str, client_ip: str,
                 )
     except Exception as e:
         print(f"\n[CRITICAL AUDIT ERROR] -> Failed to write to public.audit_logs table: {e}\n")
+
+
+# ── Keep-alive ─────────────────────────────────────────────────────────────
+async def _keepalive_loop():
+    """Pings this service's own public /health endpoint every
+    KEEPALIVE_SECONDS so Render's free-tier idle timer never has a long
+    enough gap to spin it down. urllib is blocking, so it's pushed onto a
+    worker thread each tick to avoid stalling the event loop."""
+    await asyncio.sleep(KEEPALIVE_SECONDS)
+    while True:
+        try:
+            def _ping():
+                urllib.request.urlopen(f"{SELF_URL}/health", timeout=15)
+            await asyncio.to_thread(_ping)
+        except Exception as e:
+            print(f"[-] Keep-alive ping failed: {e}")
+        await asyncio.sleep(KEEPALIVE_SECONDS)
 
 
 # ── System Startup Verification ───────────────────────────────────────────────
@@ -88,7 +118,9 @@ async def lifespan(app: FastAPI):
         print(f"[CRITICAL FAILURE] Reason: {e}")
         print("[SYSTEM STATUS]   Server starting in a degraded or disconnected state.")
     print("="*80 + "\n")
+    keepalive_task = asyncio.create_task(_keepalive_loop())
     yield
+    keepalive_task.cancel()
 
 
 app = FastAPI(

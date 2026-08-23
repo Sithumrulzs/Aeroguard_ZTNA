@@ -33,3 +33,4 @@ class VendorSession(Base):
     last_seen_lat   = Column(Float)
     last_seen_lng   = Column(Float)
     last_seen_at    = Column(DateTime)
+    granted_phone_ip = Column(String)

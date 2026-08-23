@@ -134,7 +134,16 @@ def _flush_conntrack(ip: str):
 
 
 def _remove(client_ip: str):
-    """Remove phone's port-specific iptables rules."""
+    """Remove phone's port-specific iptables rules.
+
+    Deliberately silent — called speculatively (and safely/idempotently)
+    by the revocation watcher for any DB-revoked session within its
+    reconciliation window, whether or not this IP is still actually
+    tracked. Callers that know a real removal happened print it
+    themselves (see _schedule's natural-expiry path and the revocation
+    watcher's still_tracked check) — logging here would print a
+    misleading "session expired" line on every poll for already-cleaned-
+    up sessions."""
     subprocess.run(
         ["iptables", "-D", "INPUT",
          "-s", client_ip, "-p", "tcp", "--dport", str(GATEWAY_PORT), "-j", "ACCEPT"],
@@ -148,7 +157,6 @@ def _remove(client_ip: str):
     )
     _flush_conntrack(client_ip)
     _active_phones.discard(client_ip)
-    print(f"[!] RULES REMOVED   {client_ip} phone session expired")
 
 
 def _schedule(client_ip: str, timeout: int, username: str):
@@ -162,6 +170,7 @@ def _schedule(client_ip: str, timeout: int, username: str):
             _remove(client_ip)
             _log("SESSION_EXPIRED", username, "EXPIRED", client_ip,
                  {"timeout_seconds": timeout})
+            print(f"[!] RULES REMOVED   {client_ip} phone session expired")
             with _lock:
                 _timers.pop(client_ip, None)
 
@@ -496,6 +505,21 @@ def _vendor_knock(ip: str, d: dict):
          {"company": session["company_name"], "session_seconds": timeout})
     print(f"[+] GRANTED       {vendor_name} — {timeout}s session open")
 
+    # Persist the granted IP so the revocation watcher can still find and
+    # tear this down even if this process restarts before the vendor is
+    # revoked — _vendor_phone_map alone is in-memory only and would
+    # otherwise be silently lost, leaving the grant un-revokable.
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE public.vendor_sessions SET granted_phone_ip = %s "
+                    "WHERE qr_token = %s",
+                    (ip, token_hash)
+                )
+    except Exception as e:
+        print(f"[-] Failed to persist granted_phone_ip: {e}")
+
     # ── Wait for admin to select + approve the vendor's device ────────────────
     # No auto-detection here — picking "whichever device talks first" is not
     # a reliable way to identify the vendor's laptop. The admin must select it
@@ -529,21 +553,21 @@ def _revocation_watcher():
     Cancels the session timer and removes iptables + conntrack rules immediately
     so access is cut before the natural expiry timer fires.
 
-    The laptop side is reconciled against vendor_sessions.pending_device_ip
-    (persisted in the DB) rather than only the in-memory _vendor_laptop_map —
-    that map lives purely in this process's memory, so if spa_sniffer.py was
-    ever restarted after a laptop was granted access (crash, VM reboot,
-    service restart), the map is empty and the old approach would silently
-    never tear that grant down again even though the DB correctly shows
-    'revoked'. Bounded to sessions revoked/expired within the last 24h so
-    this doesn't grow into an unbounded full-table scan over time.
+    Both the phone and laptop sides are reconciled against columns
+    persisted in the DB (granted_phone_ip, pending_device_ip) rather than
+    only the in-memory _vendor_phone_map/_vendor_laptop_map — those maps
+    live purely in this process's memory, so if spa_sniffer.py was ever
+    restarted after a device was granted access (crash, VM reboot, service
+    restart), the maps are empty and an in-memory-only approach would
+    silently never tear that grant down again even though the DB correctly
+    shows 'revoked'. Bounded to sessions revoked/expired within the last
+    24h so this doesn't grow into an unbounded full-table scan over time.
     """
     while True:
         time.sleep(20)
         try:
             with get_db() as conn:
                 with conn.cursor() as cur:
-                    revoked_laptops = []
                     cur.execute(
                         """SELECT qr_token, vendor_username, pending_device_ip
                            FROM public.vendor_sessions
@@ -553,28 +577,31 @@ def _revocation_watcher():
                     )
                     revoked_laptops = cur.fetchall()
 
-                    revoked_phones = {}
-                    tokens = list(_vendor_phone_map.keys())
-                    if tokens:
-                        cur.execute(
-                            """SELECT qr_token, vendor_username FROM public.vendor_sessions
-                               WHERE status IN ('revoked', 'expired')
-                                 AND qr_token = ANY(%s)""",
-                            (tokens,)
-                        )
-                        revoked_phones = {r["qr_token"]: r["vendor_username"] for r in cur.fetchall()}
+                    cur.execute(
+                        """SELECT qr_token, vendor_username, granted_phone_ip
+                           FROM public.vendor_sessions
+                           WHERE status IN ('revoked', 'expired')
+                             AND granted_phone_ip IS NOT NULL
+                             AND valid_until > NOW() - INTERVAL '24 hours'"""
+                    )
+                    revoked_phones = cur.fetchall()
         except Exception as e:
             print(f"[-] Revocation watcher DB error: {e}")
             continue
 
-        for token, vendor_name in revoked_phones.items():
-            phone_ip = _vendor_phone_map.pop(token, None)
-            if phone_ip and phone_ip in _active_phones:
-                with _lock:
-                    t = _timers.pop(phone_ip, None)
-                    if t:
-                        t.cancel()
-                _remove(phone_ip)
+        for row in revoked_phones:
+            token, vendor_name, phone_ip = (
+                row["qr_token"], row["vendor_username"], row["granted_phone_ip"])
+            _vendor_phone_map.pop(token, None)
+            still_tracked = phone_ip in _active_phones
+            with _lock:
+                t = _timers.pop(phone_ip, None)
+                if t:
+                    t.cancel()
+            _remove(phone_ip)
+            if still_tracked:
+                _log("VENDOR_REVOKED", vendor_name, "REVOKED", phone_ip,
+                     {"token": token[:12] + "..."})
                 print(f"[!] VENDOR REVOKED  phone {phone_ip} — admin cut access")
 
         for row in revoked_laptops:
