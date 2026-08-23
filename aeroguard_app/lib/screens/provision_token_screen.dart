@@ -3,8 +3,8 @@ import 'package:flutter_svg/flutter_svg.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
-import 'package:http/http.dart' as http;
 import '../config/api_constants.dart';
+import '../services/central_auth_http.dart';
 
 class ProvisionTokenScreen extends StatefulWidget {
   const ProvisionTokenScreen({super.key});
@@ -68,26 +68,23 @@ class _ProvisionTokenScreenState extends State<ProvisionTokenScreen>
 
     // Register the session on the backend first.
     try {
-      final response = await http
-          .post(
-            Uri.parse(ApiConstants.vendorProvisionEndpoint),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'vendor_username':  'vendor_${vendorName.toLowerCase().replaceAll(' ', '_')}',
-              'company_name':     company,
-              'clearance_level':  'standard',
-              'target_device_id': 'vendor_device',
-              'valid_until':      expiresAt,
-              'qr_token':         token,
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
+      final response = await CentralAuthHttp.post(
+        Uri.parse(ApiConstants.vendorProvisionEndpoint),
+        body: {
+          'vendor_username':  'vendor_${vendorName.toLowerCase().replaceAll(' ', '_')}',
+          'company_name':     company,
+          'clearance_level':  'standard',
+          'target_device_id': 'vendor_device',
+          'valid_until':      expiresAt,
+          'qr_token':         token,
+        },
+      );
 
       if (response.statusCode != 200) {
         if (mounted) {
           _showProvisionError(
             'Failed to create vendor session (${response.statusCode}). '
-            'Check Choreo connectivity.',
+            'Check Central Auth connectivity.',
           );
         }
         setState(() => _isGenerating = false);
@@ -96,7 +93,8 @@ class _ProvisionTokenScreenState extends State<ProvisionTokenScreen>
     } catch (e) {
       if (mounted) {
         _showProvisionError(
-          'Central Auth unreachable. Ensure Choreo is deployed and reachable.',
+          'Central Auth unreachable. It may be waking up from idle (Render '
+          'free tier) — please wait a moment and try again.',
         );
       }
       setState(() => _isGenerating = false);

@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:mobile_scanner/mobile_scanner.dart';
 import '../config/api_constants.dart';
+import '../services/central_auth_http.dart';
 
 /// Scans the QR shown by the generic terminal exe on the vendor's laptop
 /// and links it to this vendor's session — the scan itself is the action,
@@ -37,20 +37,13 @@ class _VendorScanLaptopScreenState extends State<VendorScanLaptopScreen> {
     setState(() => _busy = true);
 
     try {
-      final res = await http
-          .post(
-            Uri.parse(ApiConstants.pairDeviceEndpoint),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'token_hash':   widget.token,
-              'pairing_code': pairingCode,
-            }),
-          )
-          // The backend free-tier instance spins down after ~15 minutes
-          // idle; the next request has to cold-start it, which can take
-          // well past a short timeout and surface as a bogus "can't
-          // reach the server" even though the request is still in flight.
-          .timeout(const Duration(seconds: 45));
+      final res = await CentralAuthHttp.post(
+        Uri.parse(ApiConstants.pairDeviceEndpoint),
+        body: {
+          'token_hash':   widget.token,
+          'pairing_code': pairingCode,
+        },
+      );
 
       if (!mounted) return;
       if (res.statusCode == 200) {

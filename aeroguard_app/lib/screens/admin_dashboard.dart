@@ -16,6 +16,7 @@ import '../services/notification_service.dart';
 import '../widgets/network_topology_card.dart';
 import '../widgets/gloss_panel.dart';
 import '../services/network_service.dart';
+import '../services/central_auth_http.dart';
 import 'sign_in_page.dart';
 import 'device_identity_screen.dart';
 import 'knock_history_screen.dart';
@@ -2004,16 +2005,13 @@ class _VaultTabState extends State<_VaultTab> {
 
     try {
       final adminUsername = await AuthService.getUsername() ?? 'admin';
-      final res = await http
-          .post(
-            Uri.parse(ApiConstants.revokeVendorEndpoint),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'admin_username': adminUsername,
-              'vendor_username': vendorUsername,
-            }),
-          )
-          .timeout(const Duration(seconds: 15));
+      final res = await CentralAuthHttp.post(
+        Uri.parse(ApiConstants.revokeVendorEndpoint),
+        body: {
+          'admin_username': adminUsername,
+          'vendor_username': vendorUsername,
+        },
+      );
 
       if (!mounted) return;
       if (res.statusCode == 200) {
@@ -2524,13 +2522,38 @@ class _VendorSessionRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  company,
-                  style: TextStyle(
-                    color: AppColors.inkPrimary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600,
-                  ),
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        company,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: AppColors.inkPrimary,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: dotColor.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Text(
+                        isActive ? 'ACTIVE' : status.toUpperCase(),
+                        style: TextStyle(
+                          color: dotColor,
+                          fontSize: 8,
+                          fontWeight: FontWeight.w700,
+                          letterSpacing: 0.8,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 2),
                 Text(
@@ -2771,19 +2794,16 @@ class _PendingDeviceWatcherState extends State<_PendingDeviceWatcher> {
       final adminUsername = await AuthService.getUsername() ?? 'admin';
       final deviceIp  = device['pending_device_ip']  as String? ?? '';
       final deviceMac = device['pending_device_mac'] as String? ?? '';
-      final res = await http
-          .post(
-            Uri.parse(ApiConstants.approveVendorDeviceEndpoint),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'token_hash':     token,
-              'admin_username': adminUsername,
-              'approved':       approved,
-              if (deviceIp.isNotEmpty) 'override_ip': deviceIp,
-              if (deviceMac.isNotEmpty) 'override_mac': deviceMac,
-            }),
-          )
-          .timeout(const Duration(seconds: 10));
+      final res = await CentralAuthHttp.post(
+        Uri.parse(ApiConstants.approveVendorDeviceEndpoint),
+        body: {
+          'token_hash':     token,
+          'admin_username': adminUsername,
+          'approved':       approved,
+          if (deviceIp.isNotEmpty) 'override_ip': deviceIp,
+          if (deviceMac.isNotEmpty) 'override_mac': deviceMac,
+        },
+      );
       if (!mounted) return;
       if (res.statusCode == 200) {
         // Don't wait for the next 4s poll to notice this is resolved —

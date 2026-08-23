@@ -439,21 +439,6 @@ async def provision_vendor(payload: VendorProvisionPayload):
                      "dummy_key_until_scanned")
                 )
 
-                # Close out any prior session still active for this vendor
-                # before opening a new one — otherwise re-provisioning the
-                # same vendor (e.g. a repeat visit) leaves the old row
-                # active forever, and the vault ends up showing multiple
-                # sessions for one vendor. This also lets the gateway's
-                # revocation watcher tear down any device access still
-                # granted under the old token.
-                cur.execute(
-                    """UPDATE public.vendor_sessions
-                       SET status = 'expired'
-                       WHERE vendor_username = %s
-                         AND status NOT IN ('expired', 'revoked')""",
-                    (payload.vendor_username,)
-                )
-
                 # Insert vendor session into public.vendor_sessions
                 cur.execute(
                     """INSERT INTO public.vendor_sessions
@@ -605,7 +590,7 @@ async def get_vendor_sessions():
                               clearance_level, status, valid_until
                        FROM public.vendor_sessions
                        WHERE valid_until > %s AND status NOT IN ('expired', 'revoked')
-                       ORDER BY valid_until ASC""",
+                       ORDER BY (status = 'active') DESC, valid_until ASC""",
                     (now,)
                 )
                 sessions = [dict(s) for s in cur.fetchall()]

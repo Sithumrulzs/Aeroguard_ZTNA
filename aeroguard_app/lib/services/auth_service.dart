@@ -1,8 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:http/http.dart' as http;
 import '../config/api_constants.dart';
+import 'central_auth_http.dart';
 
 /// Manages authentication with the AeroGuard backend
 class AuthService {
@@ -25,7 +25,7 @@ class AuthService {
   // Cleared on logout.
   static String? _sessionPassword;
 
-  /// Authenticate against the central auth server hosted on Choreo.
+  /// Authenticate against the central auth server hosted on Render.
   static Future<AuthResponse> login(String username, String password) async {
     try {
       // Login goes to central auth server (port 8000), not the gateway
@@ -34,20 +34,10 @@ class AuthService {
       debugPrint('[*] Attempting login for user: $username');
       debugPrint('[*] Central Auth: ${uri.toString()}');
 
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({'username': username, 'password': password}),
-          )
-          .timeout(
-            // Render's free tier spins the backend down after ~15 minutes
-            // idle; the next request pays a cold-start penalty that can
-            // run well past half a minute. 6s was failing outright on
-            // every cold login — long enough to actually survive a boot.
-            const Duration(seconds: 45),
-            onTimeout: () => throw Exception('timeout'),
-          );
+      final response = await CentralAuthHttp.post(
+        uri,
+        body: {'username': username, 'password': password},
+      );
 
       debugPrint('[*] Login response status: ${response.statusCode}');
 
@@ -102,17 +92,14 @@ class AuthService {
       String username, String deviceId, String publicKey) async {
     try {
       final uri = Uri.parse(ApiConstants.registerDeviceEndpoint);
-      final response = await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'username':       username,
-              'device_id':      deviceId,
-              'public_key_pem': publicKey,
-            }),
-          )
-          .timeout(const Duration(seconds: 10));
+      final response = await CentralAuthHttp.post(
+        uri,
+        body: {
+          'username':       username,
+          'device_id':      deviceId,
+          'public_key_pem': publicKey,
+        },
+      );
       debugPrint('[*] Device registration status: ${response.statusCode}');
       return response.statusCode;
     } catch (e) {
