@@ -220,16 +220,27 @@ class _NetworkTopologyCardState extends State<NetworkTopologyCard>
         return id != null && !_seenKnockIds.contains(id);
       }).toList().reversed; // oldest-first, so a burst flashes in order
 
+      bool sawGrant = false;
       for (final k in fresh) {
         final id = k['id'] as int;
         _seenKnockIds.add(id);
         final actor   = k['actor_type'] as String? ?? 'admin';
         final granted = (k['status'] as String? ?? '').startsWith('GRANTED');
+        sawGrant = sawGrant || granted;
         await _playFlash(
           actor == 'vendor' ? TopoSegment.vendorToGateway : TopoSegment.adminToGateway,
           actor == 'vendor' ? TopoColors.vendor : TopoColors.admin,
           granted,
         );
+      }
+
+      // A grant just landed — the online/offline pill's own 12s timer
+      // would otherwise take up to that long to notice, showing "offline"
+      // for several seconds right after a knock that plainly just
+      // succeeded. This 4s knock poll already caught the grant, so refresh
+      // the status right now instead of waiting on the slower timer.
+      if (sawGrant && mounted) {
+        unawaited(_fetchStats());
       }
     } catch (_) {}
   }
