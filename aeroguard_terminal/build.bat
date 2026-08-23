@@ -25,11 +25,13 @@ echo ================================================================
 echo.
 echo DEPLOYMENT STEPS:
 echo   1. Copy dist\AeroGuard_Terminal.exe to the operator workstation
-echo   2. Copy airport_system.db to the SAME folder as the .exe
-echo   3. Run it — it starts hidden in the system tray and silently
+echo      (airport_system.db is bundled into the exe now — no need to
+echo      copy it separately unless you want to override it with newer
+echo      data without rebuilding, in which case drop it next to the exe)
+echo   2. Run it — it starts hidden in the system tray and silently
 echo      polls the gateway. No setup, no Windows Startup entry needed
 echo      to test; add one separately only for a permanent admin box.
-echo   4. The terminal pops to the foreground automatically the
+echo   3. The terminal pops to the foreground automatically the
 echo      moment the gateway grants this machine's IP a session —
 echo      nothing needs to be called from the gateway side.
 echo.

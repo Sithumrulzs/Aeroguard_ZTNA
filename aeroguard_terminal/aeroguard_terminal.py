@@ -54,17 +54,24 @@ if getattr(sys, "frozen", False):
     _here = os.path.dirname(os.path.abspath(sys.argv[0]))
 else:
     _here = os.path.dirname(os.path.abspath(__file__))
-DB_CANDIDATES = [
-    os.path.join(_here, "airport_system.db"),
-    os.path.join(_here, "..", "airport_system.db"),
-    os.path.join(_here, "fids", "airport_system.db"),
-]
-DB_PATH = next((p for p in DB_CANDIDATES if os.path.exists(p)), DB_CANDIDATES[0])
 
 def resource_path(rel_path):
     """Resolve bundled assets — works both as a script and as a PyInstaller exe."""
     base = getattr(sys, "_MEIPASS", _here)
     return os.path.join(base, rel_path)
+
+# External copies are checked first so an admin can drop an updated
+# airport_system.db next to the exe without a rebuild; the bundled copy
+# (packaged into the exe itself via the .spec's datas — see build.bat's
+# deployment note, now no longer required) is the last-resort fallback so
+# the app always has *some* working data even if that step is skipped.
+DB_CANDIDATES = [
+    os.path.join(_here, "airport_system.db"),
+    os.path.join(_here, "..", "airport_system.db"),
+    os.path.join(_here, "fids", "airport_system.db"),
+    resource_path("airport_system.db"),
+]
+DB_PATH = next((p for p in DB_CANDIDATES if os.path.exists(p)), DB_CANDIDATES[0])
 
 def log_crash(context):
     """This build runs windowed (console=False, see the .spec) so there is

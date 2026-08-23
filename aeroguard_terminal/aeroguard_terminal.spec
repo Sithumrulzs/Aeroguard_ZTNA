@@ -7,7 +7,7 @@ a = Analysis(
     ['aeroguard_terminal.py'],
     pathex=['.'],
     binaries=[],
-    datas=[('assets', 'assets')],
+    datas=[('assets', 'assets'), ('airport_system.db', '.')],
     hiddenimports=[
         'tkinter', 'tkinter.scrolledtext', 'tkinter.font',
         'threading', 'urllib.request', 'urllib.error',
