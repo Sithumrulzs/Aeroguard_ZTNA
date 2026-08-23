@@ -53,7 +53,14 @@ app.add_middleware(
 # ── Database ──────────────────────────────────────────────────────────────────
 @contextmanager
 def get_db():
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    # connect_timeout: without one, a flaky path to Supabase can hang for
+    # the OS's default TCP connect timeout (often 30s+) before failing —
+    # far past any client-side HTTP timeout, so the caller just sees a
+    # dead request with no clean error. Failing fast here means a bad
+    # connection surfaces quickly as a real error the client can retry
+    # against, instead of a silent hang.
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor,
+                             connect_timeout=10)
     try:
         yield conn
         conn.commit()

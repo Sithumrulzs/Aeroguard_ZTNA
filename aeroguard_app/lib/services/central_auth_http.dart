@@ -5,15 +5,20 @@ import 'package:http/http.dart' as http;
 ///
 /// Render's free tier spins the service down after ~15 min idle, so the
 /// next request pays a cold-start penalty that can occasionally run past
-/// even a generous single timeout — and separately, a single dropped
+/// even a generous single timeout — and separately, a dropped or flaky
 /// connection attempt (unrelated to cold start) looks identical to the
 /// caller. One big timeout makes the user wait a long time doing nothing
-/// on a genuine failure; two independent attempts recovers from both
-/// cases — and when attempt one was actually a cold start, the server
-/// keeps booting in the background regardless of the client giving up on
-/// it, so attempt two often lands fast against an now-warm instance.
+/// on a genuine failure; three independent attempts recovers from both
+/// cases — and when an earlier attempt was actually a cold start, the
+/// server keeps booting in the background regardless of the client
+/// giving up on it, so a later attempt often lands fast against an
+/// now-warm instance.
 class CentralAuthHttp {
-  static const _timeouts = [Duration(seconds: 20), Duration(seconds: 50)];
+  static const _timeouts = [
+    Duration(seconds: 20),
+    Duration(seconds: 40),
+    Duration(seconds: 60),
+  ];
 
   static Future<http.Response> post(Uri uri, {required Map<String, dynamic> body}) {
     final encoded = jsonEncode(body);

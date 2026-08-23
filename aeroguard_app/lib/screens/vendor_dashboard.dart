@@ -121,7 +121,7 @@ class _VendorDashboardState extends State<VendorDashboard> {
                 headers: {'Content-Type': 'application/json'},
                 body: knockBody,
               )
-              .timeout(const Duration(seconds: 15));
+              .timeout(const Duration(seconds: 25));
           break;
         } catch (e) {
           if (attempt == maxAttempts) rethrow;
@@ -217,7 +217,7 @@ class _VendorDashboardState extends State<VendorDashboard> {
     try {
       final uri = Uri.parse(
           '${ApiConstants.vendorDeviceStatusEndpoint}?token=${widget.token}');
-      final res = await http.get(uri).timeout(const Duration(seconds: 6));
+      final res = await http.get(uri).timeout(const Duration(seconds: 10));
       if (!mounted) { _pollInFlight = false; return; }
 
       if (res.statusCode == 200) {

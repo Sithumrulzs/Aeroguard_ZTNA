@@ -352,7 +352,7 @@ def poll_session():
     of a real, granted session, not a trusted inbound message.
     """
     try:
-        req = urllib.request.urlopen(TERMINAL_SESSION_URL, timeout=5)
+        req = urllib.request.urlopen(TERMINAL_SESSION_URL, timeout=10)
         return json.loads(req.read().decode())
     except Exception:
         return None

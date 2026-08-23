@@ -45,7 +45,14 @@ KEEPALIVE_SECONDS   = 600
 @contextmanager
 def get_db():
     """Context manager yielding a psycopg2 connection with RealDictCursor."""
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+    # connect_timeout: without one, a flaky path to Supabase can hang for
+    # the OS's default TCP connect timeout (often 30s+) before failing —
+    # far past any client-side HTTP timeout (even the mobile app's
+    # CentralAuthHttp retries), so the request just dies with no clean
+    # error for those retries to actually act on. Failing fast here means
+    # a bad connection surfaces quickly as a real, retryable error.
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor,
+                             connect_timeout=10)
     try:
         yield conn
         conn.commit()
