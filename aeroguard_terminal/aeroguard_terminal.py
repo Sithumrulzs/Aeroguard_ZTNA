@@ -44,7 +44,16 @@ CENTRAL_AUTH_URL       = "https://aeroguard-ztna.onrender.com"
 REGISTER_PAIRING_URL   = f"{CENTRAL_AUTH_URL}/api/v1/device/register-pairing"
 IS_ADMIN_LAPTOP_URL    = f"{CENTRAL_AUTH_URL}/api/v1/device/is-admin-laptop"
 
-_here = os.path.dirname(os.path.abspath(sys.argv[0]))
+# sys.argv[0] is only reliable for locating this app's own folder when
+# frozen (PyInstaller always sets it to the exe's real absolute path). Run
+# as a plain script from a different working directory (a shortcut, a
+# scheduled task, ...), abspath(sys.argv[0]) resolves against the *cwd*
+# instead of the script's actual location, silently pointing DB_CANDIDATES
+# at the wrong folder.
+if getattr(sys, "frozen", False):
+    _here = os.path.dirname(os.path.abspath(sys.argv[0]))
+else:
+    _here = os.path.dirname(os.path.abspath(__file__))
 DB_CANDIDATES = [
     os.path.join(_here, "airport_system.db"),
     os.path.join(_here, "..", "airport_system.db"),
@@ -373,6 +382,31 @@ def _own_mac():
     return ":".join(f"{(node >> shift) & 0xff:02x}" for shift in range(40, -1, -8))
 
 def _own_local_ip():
+    """
+    Prefers whichever local interface is actually on the gateway's own
+    /24 subnet, rather than trusting the OS's default-route choice below.
+    A laptop with a second active connection (a phone's personal hotspot,
+    a VPN, Bluetooth tethering, ...) can have its default route point
+    somewhere other than the gateway's LAN even while its real Wi-Fi is
+    still connected to it — the plain "connect a UDP socket toward the
+    gateway, read back whichever local address the OS picked" trick below
+    is exactly what that fools, silently self-reporting an address the
+    gateway can never actually reach (seen in practice: a laptop on the
+    right Wi-Fi still reporting an Apple Personal-Hotspot-range address
+    because a phone tether was also active).
+    """
+    try:
+        import psutil
+        gateway_prefix = ".".join(GATEWAY_HOST.split(".")[:3]) + "."
+        for addrs in psutil.net_if_addrs().values():
+            for a in addrs:
+                if a.family == socket.AF_INET and a.address.startswith(gateway_prefix):
+                    return a.address
+    except Exception:
+        pass
+
+    # Fallback only — used if no interface is actually on the gateway's
+    # subnet (e.g. testing off-LAN) or psutil is unavailable.
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect((GATEWAY_HOST, 1))
@@ -612,6 +646,20 @@ class AeroGuardTerminal:
         self.shadow_canvas.create_image(0, 0, image=self._shadow_photo, anchor="nw")
 
     # ─────────────────────────────────────────────
+    #  FIDS HEADER BADGE  -  updated from boot's connectivity check AND
+    #  every later fids_get()-backed command, so a FIDS that was down at
+    #  boot but reachable by the time "fids status"/"fids flights"/
+    #  "fids summary" is actually run flips the badge live instead of
+    #  leaving it stuck on the stale "FIDS OFF" from startup.
+    # ─────────────────────────────────────────────
+    def _set_fids_badge(self, ok):
+        self._ui(lambda: (
+            self.header_canvas.itemconfig(self.fids_bg,
+                                           fill=FG_GREEN if ok else FG_ORANGE),
+            self.header_canvas.itemconfig(self.fids_txt,
+                                           text="FIDS OK" if ok else "FIDS OFF")))
+
+    # ─────────────────────────────────────────────
     #  WRITE HELPERS
     # ─────────────────────────────────────────────
     def w(self, text, tag="ok"):
@@ -642,8 +690,7 @@ class AeroGuardTerminal:
         self.wl()
         self.wl(f"  Session Time  : {self.session['time']}", "dim")
         self.wl(f"  Verified User : {name}", "ok")
-        self.wl(f"  Client IP     : {self.session['ip']}", "dim")
-        self.wl(f"  Auth Method   : Port-Knock ZTNA (no password required)", "dim")
+        self.wl(f"  Gateway IP    : {self.session['ip']}", "dim")
         self.wl()
 
         # DB check
@@ -667,11 +714,10 @@ class AeroGuardTerminal:
             if token:
                 fids_sso_login(token)   # best-effort — fids_get() retries once anyway
             data, err = fids_get("/api/kpis")
+            self._set_fids_badge(bool(data))
             if data:
                 self.root.after(0, lambda: (
                     self.wl("  [FIDS]  Dashboard ..................... ONLINE", "ok"),
-                    self.header_canvas.itemconfig(self.fids_bg, fill=FG_GREEN),
-                    self.header_canvas.itemconfig(self.fids_txt, text="FIDS OK"),
                     self.wl(),
                     self.wl("  Gateway is OPEN. Type  help  to see all commands.", "cyan"),
                     self.wl()
@@ -679,8 +725,6 @@ class AeroGuardTerminal:
             else:
                 self.root.after(0, lambda: (
                     self.wl("  [FIDS]  Dashboard ..................... OFFLINE", "warn"),
-                    self.header_canvas.itemconfig(self.fids_bg, fill=FG_ORANGE),
-                    self.header_canvas.itemconfig(self.fids_txt, text="FIDS OFF"),
                     self.wl(),
                     self.wl("  Gateway is OPEN. Type  help  to see all commands.", "cyan"),
                     self.wl()
@@ -851,8 +895,7 @@ class AeroGuardTerminal:
         self.wl("  VERIFIED SESSION", "sec")
         self.sep(40)
         self.w("  User        : ", "dim"); self.wl(s["user"], "ok")
-        self.w("  IP Address  : ", "dim"); self.wl(s["ip"], "white")
-        self.w("  Auth        : ", "dim"); self.wl("Port-Knock ZTNA  (no password)", "white")
+        self.w("  Gateway IP  : ", "dim"); self.wl(s["ip"], "white")
         self.w("  Time        : ", "dim"); self.wl(s["time"], "white")
         self.sep(40)
         self.wl()
@@ -861,6 +904,7 @@ class AeroGuardTerminal:
         db_ok     = os.path.exists(DB_PATH)
         data, err = fids_get("/api/summary")
         fids_ok   = data is not None
+        self._set_fids_badge(fids_ok)
         def _d():
             self.wl("  SYSTEM STATUS", "sec")
             self.sep(40)
@@ -1106,6 +1150,7 @@ class AeroGuardTerminal:
 
     def _fids_status(self):
         data, err = fids_get("/api/kpis")
+        self._set_fids_badge(data is not None)
         def _d():
             self.wl("  FIDS STATUS", "sec")
             self.sep(40)
@@ -1128,6 +1173,7 @@ class AeroGuardTerminal:
 
     def _fids_flights(self):
         data, err = fids_get("/api/flights")
+        self._set_fids_badge(data is not None)
         def _d():
             if err: self.wl(f"  error: {err}", "err"); self.wl(); return
             self.wl(f"  FIDS -- LIVE FLIGHTS  ({len(data)} records)", "sec")
@@ -1152,6 +1198,7 @@ class AeroGuardTerminal:
     def _fids_summary(self):
         kpis,    err1 = fids_get("/api/kpis")
         reports, err2 = fids_get("/api/reports")
+        self._set_fids_badge(kpis is not None and reports is not None)
         def _d():
             err = err1 or err2
             if err: self.wl(f"  error: {err}", "err"); self.wl(); return
