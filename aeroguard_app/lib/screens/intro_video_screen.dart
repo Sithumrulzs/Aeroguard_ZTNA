@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
+import 'package:audioplayers/audioplayers.dart';
 import '../services/auth_service.dart';
 import '../services/biometric_service.dart';
 import '../services/enclave_service.dart';
@@ -90,6 +91,13 @@ class _IntroVideoScreenState extends State<IntroVideoScreen>
   late final AnimationController _fadeCtrl;
   late final Animation<double> _fadeOpacity;
 
+  // shots.mp4 has no audio bed of its own (see the file-level comment) — a
+  // separate player just for a plane-flying sound bed, started alongside
+  // the video and stopped whenever this screen exits, however it exits.
+  // Purely a sound layer: never gates or times any of the existing
+  // navigation/fade logic.
+  final AudioPlayer _planeSoundPlayer = AudioPlayer();
+
   // Kicked off immediately, in parallel with the video and enclave init —
   // by the time anything actually navigates, this has normally already
   // resolved, so awaiting it later adds no visible delay.
@@ -127,6 +135,7 @@ class _IntroVideoScreenState extends State<IntroVideoScreen>
         .then((_) {
           if (!mounted || _navigated) return;
           controller.play();
+          unawaited(_planeSoundPlayer.play(AssetSource('audio/Plane_flying.mp3')));
           setState(() {});
         })
         .catchError((_) {
@@ -234,6 +243,7 @@ class _IntroVideoScreenState extends State<IntroVideoScreen>
     _controller?.removeListener(_onVideoTick);
     _controller?.dispose();
     _fadeCtrl.dispose();
+    _planeSoundPlayer.dispose();
     super.dispose();
   }
 

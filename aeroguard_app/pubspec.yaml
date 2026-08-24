@@ -83,6 +83,7 @@ flutter:
     - assets/images/
     - assets/video/shots.mp4
     - assets/audio/knock_activate.mp3
+    - assets/audio/Plane_flying.mp3
 
   # To add other assets to your application, add them here:
   # assets:
