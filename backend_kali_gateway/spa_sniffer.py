@@ -568,6 +568,14 @@ def _revocation_watcher():
     silently never tear that grant down again even though the DB correctly
     shows 'revoked'. Bounded to sessions revoked/expired within the last
     24h so this doesn't grow into an unbounded full-table scan over time.
+
+    Each query excludes an IP if any OTHER currently-active/pending
+    session also claims it — DHCP on a stable LAN tends to keep handing
+    the same device the same IP, so an old revoked/expired session and a
+    brand-new legitimate grant can easily share one. Without this check, a
+    stale revoked row from hours ago would keep tearing down a completely
+    unrelated, currently-active session every single poll purely because
+    the IP happened to match.
     """
     while True:
         time.sleep(20)
@@ -575,20 +583,30 @@ def _revocation_watcher():
             with get_db() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        """SELECT qr_token, vendor_username, pending_device_ip
-                           FROM public.vendor_sessions
-                           WHERE status IN ('revoked', 'expired')
-                             AND pending_device_ip IS NOT NULL
-                             AND valid_until > NOW() - INTERVAL '24 hours'"""
+                        """SELECT v1.qr_token, v1.vendor_username, v1.pending_device_ip
+                           FROM public.vendor_sessions v1
+                           WHERE v1.status IN ('revoked', 'expired')
+                             AND v1.pending_device_ip IS NOT NULL
+                             AND v1.valid_until > NOW() - INTERVAL '24 hours'
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM public.vendor_sessions v2
+                                 WHERE v2.status NOT IN ('revoked', 'expired')
+                                   AND v2.pending_device_ip = v1.pending_device_ip
+                             )"""
                     )
                     revoked_laptops = cur.fetchall()
 
                     cur.execute(
-                        """SELECT qr_token, vendor_username, granted_phone_ip
-                           FROM public.vendor_sessions
-                           WHERE status IN ('revoked', 'expired')
-                             AND granted_phone_ip IS NOT NULL
-                             AND valid_until > NOW() - INTERVAL '24 hours'"""
+                        """SELECT v1.qr_token, v1.vendor_username, v1.granted_phone_ip
+                           FROM public.vendor_sessions v1
+                           WHERE v1.status IN ('revoked', 'expired')
+                             AND v1.granted_phone_ip IS NOT NULL
+                             AND v1.valid_until > NOW() - INTERVAL '24 hours'
+                             AND NOT EXISTS (
+                                 SELECT 1 FROM public.vendor_sessions v2
+                                 WHERE v2.status NOT IN ('revoked', 'expired')
+                                   AND v2.granted_phone_ip = v1.granted_phone_ip
+                             )"""
                     )
                     revoked_phones = cur.fetchall()
         except Exception as e:
