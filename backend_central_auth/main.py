@@ -511,13 +511,18 @@ async def dashboard_stats():
                 vendor_names = [r["vendor_username"] for r in cur.fetchall()]
 
         # ── Knocks today ──────────────────────────────────────────────────────
+        # Same event set as /dashboard/knock-history — admin AND vendor
+        # knocks. This previously only counted ZTNA_KNOCK (admin), so any
+        # vendor activity was silently invisible to this metric even
+        # though the Security Posture card presents it as the day's total.
         today = datetime.now(timezone.utc).date().isoformat()
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT COUNT(*) AS cnt FROM public.audit_logs "
-                    "WHERE event_type = 'ZTNA_KNOCK' AND status = 'GRANTED' "
-                    "AND created_at >= %s", (today,)
+                    "WHERE event_type = ANY(%s) AND status = 'GRANTED' "
+                    "AND created_at >= %s",
+                    (['ZTNA_KNOCK', 'VENDOR_KNOCK', 'VENDOR_KNOCK_SPA'], today)
                 )
                 knocks = cur.fetchone()["cnt"]
 
