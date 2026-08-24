@@ -878,20 +878,31 @@ async def get_knock_history(limit: int = 50):
                     (list(event_types), limit)
                 )
                 rows = cur.fetchall()
+
+                # True all-time totals, independent of the LIMIT above —
+                # the summary chips are meant to read as "granted/denied
+                # knocks overall", not "within whatever page size the list
+                # happens to be showing". A single aggregate query over the
+                # full table, not the capped `rows` fetch used for display.
+                cur.execute(
+                    """SELECT
+                           COUNT(*) FILTER (WHERE status = 'GRANTED') AS granted_total,
+                           COUNT(*) AS total
+                       FROM public.audit_logs
+                       WHERE event_type = ANY(%s)""",
+                    (list(event_types),)
+                )
+                totals = cur.fetchone()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Database error: {e}")
 
     knocks = []
-    granted = 0
     for r in rows:
         detail = {}
         try:
             detail = json.loads(r["details"]) or {}
         except Exception:
             pass
-        is_granted = r["status"] == "GRANTED"
-        if is_granted:
-            granted += 1
         knocks.append({
             "id":              r["id"],
             "actor_type":      "admin" if r["event_type"] == "ZTNA_KNOCK" else "vendor",
@@ -904,10 +915,13 @@ async def get_knock_history(limit: int = 50):
             "created_at":      str(r["created_at"]),
         })
 
+    granted_total = totals["granted_total"] or 0
+    total = totals["total"] or 0
+
     return {
         "knocks":        knocks,
-        "granted_count": granted,
-        "denied_count":  len(knocks) - granted,
+        "granted_count": granted_total,
+        "denied_count":  total - granted_total,
     }
 
 

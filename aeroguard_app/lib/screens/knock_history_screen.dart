@@ -467,62 +467,103 @@ class _ActivityChart extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final buckets = _buildBuckets();
-    final maxTotal = buckets.fold<int>(1, (m, b) => b.total > m ? b.total : m);
+    // Rounds the scale up to a clean reference value instead of the exact
+    // busiest hour — a bar for the actual busiest hour would otherwise
+    // always touch the very top with no headroom, and the gridline/count
+    // label would land flush against the chart's edge.
+    final rawMax = buckets.fold<int>(1, (m, b) => b.total > m ? b.total : m);
+    final maxTotal = _niceCeiling(rawMax);
+    final totalGranted = buckets.fold<int>(0, (s, b) => s + b.granted);
+    final totalDenied = buckets.fold<int>(0, (s, b) => s + b.denied);
 
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),
+      padding: const EdgeInsets.fromLTRB(18, 16, 18, 12),
       decoration: BoxDecoration(
         color: AppColors.surface,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(18),
         border: Border.all(color: AppColors.border),
-        boxShadow: AppColors.softShadow(opacity: 0.06),
+        boxShadow: AppColors.softShadow(opacity: 0.08),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'ACTIVITY · LAST 8H',
-                style: TextStyle(color: AppColors.inkFaint, fontSize: 9, fontWeight: FontWeight.w700, letterSpacing: 1.5),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'ACTIVITY',
+                    style: TextStyle(color: AppColors.inkPrimary, fontSize: 12, fontWeight: FontWeight.w800, letterSpacing: 1.8),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    'Last $_chartHours hours · ${totalGranted + totalDenied} knocks',
+                    style: TextStyle(color: AppColors.inkFaint, fontSize: 9.5, letterSpacing: 0.3),
+                  ),
+                ],
               ),
               const Spacer(),
-              const _LegendDot(color: Color(0xFF10B981), label: 'Granted'),
-              const SizedBox(width: 12),
-              const _LegendDot(color: Color(0xFFEF4444), label: 'Denied'),
+              _LegendDot(color: const Color(0xFF10B981), label: 'Granted', count: totalGranted),
+              const SizedBox(width: 14),
+              _LegendDot(color: const Color(0xFFEF4444), label: 'Denied', count: totalDenied),
             ],
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 18),
           SizedBox(
-            height: 64,
+            height: 148,
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.end,
               children: [
                 for (final b in buckets) ...[
                   Expanded(child: _Bar(bucket: b, maxTotal: maxTotal)),
-                  if (b != buckets.last) const SizedBox(width: 6),
+                  if (b != buckets.last) const SizedBox(width: 7),
                 ],
               ],
             ),
           ),
-          const SizedBox(height: 6),
+          const SizedBox(height: 8),
           Row(
             children: [
               for (final b in buckets) ...[
                 Expanded(
                   child: Text(
-                    b.hour.hour.toString().padLeft(2, '0'),
+                    _hourLabel(b.hour.hour),
                     textAlign: TextAlign.center,
-                    style: TextStyle(color: AppColors.inkFaint, fontSize: 8),
+                    style: TextStyle(color: AppColors.inkFaint, fontSize: 8.5, fontWeight: FontWeight.w600),
                   ),
                 ),
-                if (b != buckets.last) const SizedBox(width: 6),
+                if (b != buckets.last) const SizedBox(width: 7),
               ],
             ],
           ),
         ],
       ),
     );
+  }
+
+  // 12h clock, matching the rest of the app's time-of-day convention —
+  // plain "hour" digits alone don't say whether a bar is from this
+  // morning or last night.
+  static String _hourLabel(int hour24) {
+    final h = hour24 % 12 == 0 ? 12 : hour24 % 12;
+    return '$h${hour24 < 12 ? 'a' : 'p'}';
+  }
+
+  // Rounds up to a clean-looking scale ceiling (1, 2, 5, 10, 20, 50, ...)
+  // so the chart has visible headroom above the busiest bar instead of
+  // that bar always pinning exactly to the top edge.
+  static int _niceCeiling(int value) {
+    if (value <= 1) return 1;
+    for (final step in [2, 3, 5, 8, 10, 15, 20, 30, 50, 80, 100]) {
+      if (value <= step) return step;
+    }
+    var ceiling = 100;
+    while (ceiling < value) {
+      ceiling *= 2;
+    }
+    return ceiling;
   }
 }
 
@@ -539,24 +580,14 @@ class _Bar extends StatelessWidget {
   final int maxTotal;
   const _Bar({required this.bucket, required this.maxTotal});
 
+  // The visible track a bar can grow within — deliberately shorter than
+  // the chart's full SizedBox height, leaving room above for the count
+  // label so it never crowds the tallest bar.
+  static const double trackHeight = 122;
+  static const double minVisible = 4;
+
   @override
   Widget build(BuildContext context) {
-    const double trackHeight = 52;
-    const double minVisible = 3;
-
-    if (bucket.total == 0) {
-      return Align(
-        alignment: Alignment.bottomCenter,
-        child: Container(
-          height: 2,
-          decoration: BoxDecoration(
-            color: AppColors.border,
-            borderRadius: BorderRadius.circular(1),
-          ),
-        ),
-      );
-    }
-
     final grantedH = bucket.granted == 0 ? 0.0 : (bucket.granted / maxTotal) * trackHeight;
     final deniedH = bucket.denied == 0 ? 0.0 : (bucket.denied / maxTotal) * trackHeight;
     final grantedHeight = bucket.granted == 0 ? 0.0 : (grantedH < minVisible ? minVisible : grantedH);
@@ -564,28 +595,79 @@ class _Bar extends StatelessWidget {
     final hasBoth = bucket.granted > 0 && bucket.denied > 0;
 
     return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       mainAxisAlignment: MainAxisAlignment.end,
       children: [
-        if (bucket.denied > 0)
-          Container(
-            height: deniedHeight,
-            decoration: BoxDecoration(
-              color: const Color(0xFFEF4444).withValues(alpha: 0.85),
-              borderRadius: BorderRadius.vertical(
-                top: const Radius.circular(3),
-                bottom: hasBoth ? Radius.zero : const Radius.circular(3),
+        // Count label — reserves its row always, so every column's track
+        // lines up at the same baseline regardless of whether that hour
+        // had any activity.
+        SizedBox(
+          height: 15,
+          child: bucket.total > 0
+              ? Center(
+                  child: Text(
+                    '${bucket.total}',
+                    style: TextStyle(color: AppColors.inkSecondary, fontSize: 10, fontWeight: FontWeight.w700),
+                  ),
+                )
+              : null,
+        ),
+        const SizedBox(height: 5),
+        // A constant full-height rail behind every bar — the actual scale
+        // reference. Without it, a lone short bar has nothing to visually
+        // compare itself against and low activity is easy to misread as
+        // "about the same" as a busier hour instead of genuinely quiet.
+        SizedBox(
+          height: trackHeight,
+          child: Stack(
+            fit: StackFit.expand,
+            alignment: Alignment.bottomCenter,
+            children: [
+              Container(
+                decoration: BoxDecoration(
+                  color: AppColors.border.withValues(alpha: 0.45),
+                  borderRadius: BorderRadius.circular(5),
+                ),
               ),
-            ),
+              Column(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  if (bucket.denied > 0)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 450),
+                      curve: Curves.easeOutCubic,
+                      height: deniedHeight,
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFEF4444).withValues(alpha: 0.9),
+                        borderRadius: BorderRadius.vertical(
+                          top: const Radius.circular(5),
+                          bottom: hasBoth ? Radius.zero : const Radius.circular(5),
+                        ),
+                      ),
+                    ),
+                  if (hasBoth) const SizedBox(height: 2), // surface gap between stacked segments
+                  if (bucket.granted > 0)
+                    AnimatedContainer(
+                      duration: const Duration(milliseconds: 450),
+                      curve: Curves.easeOutCubic,
+                      height: grantedHeight,
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                          colors: [Color(0xFF34D399), Color(0xFF0EA371)],
+                        ),
+                        borderRadius: BorderRadius.vertical(
+                          top: hasBoth ? Radius.zero : const Radius.circular(5),
+                          bottom: const Radius.circular(5),
+                        ),
+                      ),
+                    ),
+                ],
+              ),
+            ],
           ),
-        if (hasBoth) const SizedBox(height: 2), // surface gap between stacked segments
-        if (bucket.granted > 0)
-          Container(
-            height: grantedHeight,
-            decoration: const BoxDecoration(
-              color: Color(0xFF10B981),
-              borderRadius: BorderRadius.vertical(bottom: Radius.circular(3)),
-            ),
-          ),
+        ),
       ],
     );
   }
@@ -594,16 +676,24 @@ class _Bar extends StatelessWidget {
 class _LegendDot extends StatelessWidget {
   final Color color;
   final String label;
-  const _LegendDot({required this.color, required this.label});
+  final int count;
+  const _LegendDot({required this.color, required this.label, required this.count});
 
   @override
   Widget build(BuildContext context) {
-    return Row(
-      mainAxisSize: MainAxisSize.min,
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.end,
       children: [
-        Container(height: 6, width: 6, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
-        const SizedBox(width: 5),
-        Text(label, style: TextStyle(color: AppColors.inkSecondary, fontSize: 9)),
+        Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(height: 6, width: 6, decoration: BoxDecoration(shape: BoxShape.circle, color: color)),
+            const SizedBox(width: 5),
+            Text(label, style: TextStyle(color: AppColors.inkSecondary, fontSize: 9, fontWeight: FontWeight.w600)),
+          ],
+        ),
+        const SizedBox(height: 1),
+        Text('$count', style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w800)),
       ],
     );
   }
