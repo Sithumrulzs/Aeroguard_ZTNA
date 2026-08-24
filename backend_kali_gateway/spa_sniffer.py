@@ -165,7 +165,28 @@ def _remove(client_ip: str):
     _active_phones.discard(client_ip)
 
 
-def _schedule(client_ip: str, timeout: int, username: str):
+def _mark_session_expired(qr_token: str):
+    """Flip a vendor session's DB status to 'expired' once its natural
+    timer fires. Without this, the firewall grant gets torn down
+    correctly but the DB still shows 'active' forever (or until some
+    other process touches it) — harmless for the vendor app itself
+    (it also checks wall-clock valid_until directly), but it means the
+    gateway's own revocation watcher, which mainly keys off status,
+    can't recognize this session as done if the process restarts before
+    the timer would have fired again."""
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE public.vendor_sessions SET status = 'expired' "
+                    "WHERE qr_token = %s AND status NOT IN ('revoked', 'expired')",
+                    (qr_token,)
+                )
+    except Exception as e:
+        print(f"[-] Failed to mark session expired: {e}")
+
+
+def _schedule(client_ip: str, timeout: int, username: str, qr_token: str = None):
     """Schedule removal of phone session rules."""
     with _lock:
         existing = _timers.pop(client_ip, None)
@@ -177,6 +198,8 @@ def _schedule(client_ip: str, timeout: int, username: str):
             _log("SESSION_EXPIRED", username, "EXPIRED", client_ip,
                  {"timeout_seconds": timeout})
             print(f"[!] RULES REMOVED   {client_ip} phone session expired")
+            if qr_token:
+                _mark_session_expired(qr_token)
             with _lock:
                 _timers.pop(client_ip, None)
 
@@ -267,7 +290,7 @@ def _remove_laptop(laptop_ip: str):
     _active_laptops.discard(laptop_ip)
 
 
-def _schedule_laptop(laptop_ip: str, timeout: int, name: str):
+def _schedule_laptop(laptop_ip: str, timeout: int, name: str, qr_token: str = None):
     """Schedule removal of laptop full-access rules."""
     key = f"laptop:{laptop_ip}"
     with _lock:
@@ -280,6 +303,8 @@ def _schedule_laptop(laptop_ip: str, timeout: int, name: str):
             _log("LAPTOP_EXPIRED", name, "EXPIRED", laptop_ip,
                  {"timeout_seconds": timeout})
             print(f"[!] LAPTOP REMOVED  {laptop_ip} — session expired")
+            if qr_token:
+                _mark_session_expired(qr_token)
             with _lock:
                 _timers.pop(key, None)
 
@@ -358,7 +383,7 @@ def _poll_for_approval(token_hash: str, vendor_name: str,
                 remaining   = max(int(deadline - time.time()), 60)
                 _inject_laptop(approved_ip)
                 _vendor_laptop_map[token_hash] = approved_ip
-                _schedule_laptop(approved_ip, remaining, vendor_name)
+                _schedule_laptop(approved_ip, remaining, vendor_name, qr_token=token_hash)
                 _log("VENDOR_DEVICE", vendor_name, "APPROVED", approved_ip,
                      {"token": token_hash[:12] + "...", "remaining_seconds": remaining,
                       "mac": row["pending_device_mac"] or ""})
@@ -506,7 +531,7 @@ def _vendor_knock(ip: str, d: dict):
     # ── Grant phone access to GATEWAY_PORT ───────────────────────────────────
     _inject(ip)
     _vendor_phone_map[token_hash] = ip
-    _schedule(ip, timeout, vendor_name)
+    _schedule(ip, timeout, vendor_name, qr_token=token_hash)
     _log("VENDOR_KNOCK_SPA", vendor_name, "GRANTED", ip,
          {"company": session["company_name"], "session_seconds": timeout})
     print(f"[+] GRANTED       {vendor_name} — {timeout}s session open")
@@ -570,12 +595,21 @@ def _revocation_watcher():
     24h so this doesn't grow into an unbounded full-table scan over time.
 
     Each query excludes an IP if any OTHER currently-active/pending
-    session also claims it — DHCP on a stable LAN tends to keep handing
-    the same device the same IP, so an old revoked/expired session and a
+    session (both by status AND still within its own valid_until) also
+    claims it — DHCP on a stable LAN tends to keep handing the same
+    device the same IP, so an old revoked/expired session and a
     brand-new legitimate grant can easily share one. Without this check, a
     stale revoked row from hours ago would keep tearing down a completely
     unrelated, currently-active session every single poll purely because
     the IP happened to match.
+
+    Also matches on wall-clock valid_until < NOW(), not just an explicit
+    status of 'revoked'/'expired' — the natural per-session timer
+    (_schedule/_schedule_laptop) writes 'expired' to the DB when it
+    fires, but if this process restarts before that timer would have
+    fired, the timer is gone and the DB is left showing 'active' forever
+    past its actual time limit. The wall-clock check catches that case
+    too instead of leaving that grant open indefinitely.
     """
     while True:
         time.sleep(20)
@@ -585,12 +619,13 @@ def _revocation_watcher():
                     cur.execute(
                         """SELECT v1.qr_token, v1.vendor_username, v1.pending_device_ip
                            FROM public.vendor_sessions v1
-                           WHERE v1.status IN ('revoked', 'expired')
+                           WHERE (v1.status IN ('revoked', 'expired') OR v1.valid_until < NOW())
                              AND v1.pending_device_ip IS NOT NULL
                              AND v1.valid_until > NOW() - INTERVAL '24 hours'
                              AND NOT EXISTS (
                                  SELECT 1 FROM public.vendor_sessions v2
                                  WHERE v2.status NOT IN ('revoked', 'expired')
+                                   AND v2.valid_until > NOW()
                                    AND v2.pending_device_ip = v1.pending_device_ip
                              )"""
                     )
@@ -599,12 +634,13 @@ def _revocation_watcher():
                     cur.execute(
                         """SELECT v1.qr_token, v1.vendor_username, v1.granted_phone_ip
                            FROM public.vendor_sessions v1
-                           WHERE v1.status IN ('revoked', 'expired')
+                           WHERE (v1.status IN ('revoked', 'expired') OR v1.valid_until < NOW())
                              AND v1.granted_phone_ip IS NOT NULL
                              AND v1.valid_until > NOW() - INTERVAL '24 hours'
                              AND NOT EXISTS (
                                  SELECT 1 FROM public.vendor_sessions v2
                                  WHERE v2.status NOT IN ('revoked', 'expired')
+                                   AND v2.valid_until > NOW()
                                    AND v2.granted_phone_ip = v1.granted_phone_ip
                              )"""
                     )
