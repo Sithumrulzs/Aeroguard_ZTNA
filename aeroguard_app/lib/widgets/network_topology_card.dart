@@ -170,6 +170,17 @@ class _NetworkTopologyCardState extends State<NetworkTopologyCard>
       }
     } catch (_) {}
 
+    // This device's own direct probe found no local tunnel, but recent
+    // knock activity from anyone (admin or vendor) is proof the gateway
+    // itself is alive and working — that's a materially different state
+    // from a genuinely unreachable gateway, even though this device can't
+    // verify it directly either way.
+    if (status == GatewayStatus.offline &&
+        lastKnock != null &&
+        DateTime.now().difference(lastKnock).inMinutes < 3) {
+      status = GatewayStatus.liveRemote;
+    }
+
     if (!mounted) return;
 
     final wasSecure = _data.status == GatewayStatus.secure;
@@ -292,24 +303,27 @@ class _NetworkTopologyCardState extends State<NetworkTopologyCard>
   // first place. See NetworkTopologyPainter for the matching node-level
   // reasoning.
   Color get _statusColor => switch (_data.status) {
-        GatewayStatus.secure    => TopoColors.secure,
-        GatewayStatus.unsecured => TopoColors.amber,
-        GatewayStatus.offline   => TopoColors.alertRed,
-        GatewayStatus.checking  => TopoColors.textFaint,
+        GatewayStatus.secure     => TopoColors.secure,
+        GatewayStatus.liveRemote => TopoColors.brandBlue,
+        GatewayStatus.unsecured  => TopoColors.amber,
+        GatewayStatus.offline    => TopoColors.alertRed,
+        GatewayStatus.checking   => TopoColors.textFaint,
       };
 
   String get _statusPillLabel => switch (_data.status) {
-        GatewayStatus.secure    => 'Live',
-        GatewayStatus.unsecured => 'Unsecured',
-        GatewayStatus.offline   => 'Datacenter Offline',
-        GatewayStatus.checking  => 'Checking',
+        GatewayStatus.secure     => 'Live',
+        GatewayStatus.liveRemote => 'Gateway Live',
+        GatewayStatus.unsecured  => 'Unsecured',
+        GatewayStatus.offline    => 'Datacenter Offline',
+        GatewayStatus.checking   => 'Checking',
       };
 
   String get _statusSpeech => switch (_data.status) {
-        GatewayStatus.secure    => 'secured',
-        GatewayStatus.unsecured => 'online but unsecured',
-        GatewayStatus.offline   => 'offline',
-        GatewayStatus.checking  => 'checking status',
+        GatewayStatus.secure     => 'secured',
+        GatewayStatus.liveRemote => 'live — active elsewhere, no local tunnel',
+        GatewayStatus.unsecured  => 'online but unsecured',
+        GatewayStatus.offline    => 'offline',
+        GatewayStatus.checking   => 'checking status',
       };
 
   // ── interactions ──────────────────────────────────────────────────────

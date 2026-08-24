@@ -622,6 +622,7 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
   Timer? _threatTimer;
   bool? _online;
   bool? _secured;
+  DateTime? _lastKnockAt;
 
   int _threatCount = 0;
   String? _lastThreatIp;
@@ -633,6 +634,16 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
       _threatCount > 0 &&
       _lastThreatAt != null &&
       DateTime.now().difference(_lastThreatAt!).inSeconds < 120;
+
+  // This device having no direct LAN tunnel doesn't mean the gateway is
+  // actually down — a vendor or another admin can knock successfully at
+  // the same moment this device hasn't. last_knock_at comes from the
+  // cloud-reachable telemetry endpoint, so it's evidence the gateway is
+  // alive and processing knocks even when this device's own /health probe
+  // can't reach it directly.
+  bool get _gatewayConfirmedLiveRemotely =>
+      _lastKnockAt != null &&
+      DateTime.now().difference(_lastKnockAt!).inMinutes < 3;
 
   @override
   void initState() {
@@ -687,10 +698,27 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
       }
     }
 
+    DateTime? recentKnock;
+    if (!online) {
+      try {
+        final res = await http
+            .get(Uri.parse(ApiConstants.dashboardTelemetryEndpoint))
+            .timeout(const Duration(seconds: 6));
+        if (res.statusCode == 200) {
+          final json = jsonDecode(res.body) as Map<String, dynamic>;
+          final lastAt = json['last_knock_at'] as String?;
+          if (lastAt != null) {
+            recentKnock = DateTime.tryParse(lastAt)?.toLocal();
+          }
+        }
+      } catch (_) {}
+    }
+
     if (mounted) {
       setState(() {
         _online = online;
         _secured = secured;
+        _lastKnockAt = recentKnock;
       });
     }
   }
@@ -737,6 +765,12 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
       subtitle = 'Checking...';
       badge = '···';
       badgeIcon = Icons.hourglass_top_rounded;
+    } else if (isOffline && _gatewayConfirmedLiveRemotely) {
+      accent = const Color(0xFF00C3FF); // blue — informational, not a failure
+      title = 'GATEWAY LIVE';
+      subtitle = 'Active elsewhere — no local tunnel';
+      badge = 'LIVE';
+      badgeIcon = Icons.podcasts_rounded;
     } else if (isOffline) {
       accent = const Color(0xFFEF4444); // red — unreachable is a hard failure
       title = 'GATEWAY OFFLINE';

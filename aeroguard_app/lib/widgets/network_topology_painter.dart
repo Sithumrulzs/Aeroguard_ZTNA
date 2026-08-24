@@ -89,7 +89,13 @@ enum NodeStatus { active, standby, offline }
 /// Gateway health as the topology (and the card's header pill) understands
 /// it — a smaller state set than the top Overview banner's, scoped to what
 /// this card actually needs to color itself correctly.
-enum GatewayStatus { checking, offline, unsecured, secure }
+///
+/// liveRemote: this device's own direct health probe failed, but recent
+/// knock activity from someone else (admin or vendor) proves the gateway
+/// itself is alive and working — a vendor knocking doesn't open this
+/// device's own tunnel, so the direct probe alone can't tell the two
+/// apart from a genuinely offline gateway without this extra signal.
+enum GatewayStatus { checking, offline, liveRemote, unsecured, secure }
 
 /// Which node this graph currently represents (used for tap targets and the
 /// press-scale feedback drawn by the painter).
@@ -151,17 +157,19 @@ class NetworkTopologyPainter extends CustomPainter {
   // being fixed (both nodes rendering identically red with no way to
   // tell which one actually failed).
   Color get _gatewayColor => switch (status) {
-        GatewayStatus.secure    => TopoColors.secure,
-        GatewayStatus.unsecured => TopoColors.amber,
-        GatewayStatus.offline   => TopoColors.brandBlue,
-        GatewayStatus.checking  => TopoColors.textSecondary,
+        GatewayStatus.secure     => TopoColors.secure,
+        GatewayStatus.liveRemote => TopoColors.secure, // confirmed alive via someone else's knock
+        GatewayStatus.unsecured  => TopoColors.amber,
+        GatewayStatus.offline    => TopoColors.brandBlue,
+        GatewayStatus.checking   => TopoColors.textSecondary,
       };
 
   TopoAccent get _gatewayAccent => switch (status) {
-        GatewayStatus.secure    => TopoAccent.blue, // secure = same calm blue family visually; the green ring/pulse elsewhere already signals "secured"
-        GatewayStatus.unsecured => TopoAccent.amber,
-        GatewayStatus.offline   => TopoAccent.blue,
-        GatewayStatus.checking  => TopoAccent.neutral,
+        GatewayStatus.secure     => TopoAccent.blue, // secure = same calm blue family visually; the green ring/pulse elsewhere already signals "secured"
+        GatewayStatus.liveRemote => TopoAccent.blue,
+        GatewayStatus.unsecured  => TopoAccent.amber,
+        GatewayStatus.offline    => TopoAccent.blue,
+        GatewayStatus.checking   => TopoAccent.neutral,
       };
 
   // Datacenter is the node that actually carries the failure signal —
