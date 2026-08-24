@@ -243,6 +243,14 @@ class _OverviewTabState extends State<_OverviewTab>
   String _totalKnocks = '0';
   List<String> _registeredAdminNames = [];
   List<String> _vendorNames = [];
+  bool _manualRefreshing = false;
+
+  final _gatewayKey = GlobalKey<_GatewayStatusCardState>();
+  // NetworkTopologyCard's own State is private to a different file, so it
+  // can't be reached via a typed GlobalKey from here — this Listenable is
+  // the cross-file equivalent: bumping it tells the card to refresh
+  // itself, without either side needing to know the other's internals.
+  final _topologyRefreshSignal = ValueNotifier<int>(0);
 
   late AnimationController _heroCtrl;
   late Animation<double> _heroFade;
@@ -278,7 +286,20 @@ class _OverviewTabState extends State<_OverviewTab>
   void dispose() {
     _timer?.cancel();
     _heroCtrl.dispose();
+    _topologyRefreshSignal.dispose();
     super.dispose();
+  }
+
+  // Single entry point for the header's manual refresh button — pulls
+  // every live surface on this tab (overview stats, gateway board, map)
+  // at once instead of each waiting out its own independent poll timer.
+  Future<void> _refreshAll() async {
+    if (_manualRefreshing) return;
+    setState(() => _manualRefreshing = true);
+    _GatewayStatusCard.refresh(_gatewayKey);
+    _topologyRefreshSignal.value++;
+    await _fetchStats();
+    if (mounted) setState(() => _manualRefreshing = false);
   }
 
   Future<void> _loadUsername() async {
@@ -376,6 +397,34 @@ class _OverviewTabState extends State<_OverviewTab>
                   ),
                   const Spacer(),
                   GestureDetector(
+                    onTap: _manualRefreshing ? null : _refreshAll,
+                    child: Container(
+                      height: 40,
+                      width: 40,
+                      margin: const EdgeInsets.only(right: 10),
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white.withValues(alpha: 0.15),
+                        border: Border.all(
+                          color: Colors.white.withValues(alpha: 0.3),
+                        ),
+                      ),
+                      child: _manualRefreshing
+                          ? const Padding(
+                              padding: EdgeInsets.all(11),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
+                              ),
+                            )
+                          : const Icon(
+                              Icons.refresh_rounded,
+                              color: Colors.white,
+                              size: 20,
+                            ),
+                    ),
+                  ),
+                  GestureDetector(
                     onTap: widget.onLogout,
                     child: Container(
                       height: 40,
@@ -414,7 +463,7 @@ class _OverviewTabState extends State<_OverviewTab>
                     // Gateway status leads the page — in a Zero Trust
                     // posture, "is the perimeter secure right now" is the
                     // single most important thing an admin needs on open.
-                    _GatewayStatusCard(),
+                    _GatewayStatusCard(key: _gatewayKey),
                     const SizedBox(height: 26),
 
                     FadeTransition(
@@ -488,7 +537,10 @@ class _OverviewTabState extends State<_OverviewTab>
                       label: 'NETWORK MAP',
                     ),
                     const SizedBox(height: 14),
-                    NetworkTopologyCard(onViewVault: widget.onViewVault),
+                    NetworkTopologyCard(
+                      onViewVault: widget.onViewVault,
+                      refreshSignal: _topologyRefreshSignal,
+                    ),
                     const SizedBox(height: 26),
 
                     _RecentActivityCard(onViewAll: widget.onViewHistory),
@@ -611,7 +663,12 @@ class _QuickActionButton extends StatelessWidget {
 }
 
 class _GatewayStatusCard extends StatefulWidget {
-  const _GatewayStatusCard();
+  const _GatewayStatusCard({super.key});
+
+  static void refresh(GlobalKey<_GatewayStatusCardState> key) {
+    key.currentState?._checkGateway();
+    key.currentState?._checkThreats();
+  }
 
   @override
   State<_GatewayStatusCard> createState() => _GatewayStatusCardState();
@@ -623,6 +680,7 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
   bool? _online;
   bool? _secured;
   DateTime? _lastKnockAt;
+  int _liveVendorCount = 0;
 
   int _threatCount = 0;
   String? _lastThreatIp;
@@ -637,13 +695,18 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
 
   // This device having no direct LAN tunnel doesn't mean the gateway is
   // actually down — a vendor or another admin can knock successfully at
-  // the same moment this device hasn't. last_knock_at comes from the
-  // cloud-reachable telemetry endpoint, so it's evidence the gateway is
-  // alive and processing knocks even when this device's own /health probe
-  // can't reach it directly.
+  // the same moment this device hasn't. Both signals come from the
+  // cloud-reachable telemetry endpoint: _liveVendorCount is filtered
+  // server-side by valid_until > now, so it's reliable proof a session is
+  // live right now, not just that a knock happened at some point — a
+  // knock is a single instant, but the session it opens can stay valid
+  // for a full hour afterward (SESSION_TIMEOUT). last_knock_at is only a
+  // fallback for the admin case, where no equivalent expiry-aware count
+  // exists yet, so it uses that same ~1h window instead of a few minutes.
   bool get _gatewayConfirmedLiveRemotely =>
-      _lastKnockAt != null &&
-      DateTime.now().difference(_lastKnockAt!).inMinutes < 3;
+      _liveVendorCount > 0 ||
+      (_lastKnockAt != null &&
+          DateTime.now().difference(_lastKnockAt!).inMinutes < 60);
 
   @override
   void initState() {
@@ -699,6 +762,7 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
     }
 
     DateTime? recentKnock;
+    int liveVendorCount = 0;
     if (!online) {
       try {
         final res = await http
@@ -710,6 +774,12 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
           if (lastAt != null) {
             recentKnock = DateTime.tryParse(lastAt)?.toLocal();
           }
+          // active_vendors is filtered server-side by valid_until > now,
+          // so it's a genuinely reliable "is a session live right now"
+          // signal — unlike last_knock_at, which only marks the instant
+          // a knock happened, not how long the session it opened stays
+          // valid for afterward.
+          liveVendorCount = (json['active_vendors'] as num?)?.toInt() ?? 0;
         }
       } catch (_) {}
     }
@@ -719,6 +789,7 @@ class _GatewayStatusCardState extends State<_GatewayStatusCard> {
         _online = online;
         _secured = secured;
         _lastKnockAt = recentKnock;
+        _liveVendorCount = liveVendorCount;
       });
     }
   }
@@ -2142,22 +2213,54 @@ class _VaultTabState extends State<_VaultTab> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               const SizedBox(height: 24),
-              Text(
-                'HARDWARE VAULT',
-                style: TextStyle(
-                  color: AppColors.inkPrimary,
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 1.5,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Text(
-                'Device identity & active sessions',
-                style: TextStyle(
-                  color: AppColors.inkFaint,
-                  fontSize: 12,
-                ),
+              Row(
+                children: [
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'HARDWARE VAULT',
+                          style: TextStyle(
+                            color: AppColors.inkPrimary,
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.5,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'Device identity & active sessions',
+                          style: TextStyle(
+                            color: AppColors.inkFaint,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  GestureDetector(
+                    onTap: _loading ? null : _fetchVaultData,
+                    child: Container(
+                      height: 36,
+                      width: 36,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: AppColors.brandBlue.withValues(alpha: 0.1),
+                        border: Border.all(color: AppColors.brandBlue.withValues(alpha: 0.25)),
+                      ),
+                      child: _loading
+                          ? Padding(
+                              padding: const EdgeInsets.all(9),
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                valueColor: AlwaysStoppedAnimation<Color>(AppColors.brandBlue),
+                              ),
+                            )
+                          : Icon(Icons.refresh_rounded, color: AppColors.brandBlue, size: 18),
+                    ),
+                  ),
+                ],
               ),
               const SizedBox(height: 20),
 

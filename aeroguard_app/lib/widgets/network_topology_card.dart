@@ -44,7 +44,13 @@ class NetworkTopologyCard extends StatefulWidget {
   /// tab's session list instead of just a lightweight name sheet.
   final VoidCallback? onViewVault;
 
-  const NetworkTopologyCard({super.key, this.onViewVault});
+  /// Optional — a parent-owned tick a manual "refresh" action can bump to
+  /// force this card to re-fetch immediately, without either side needing
+  /// to reach into the other's private State (this card's own State class
+  /// isn't visible outside this file).
+  final Listenable? refreshSignal;
+
+  const NetworkTopologyCard({super.key, this.onViewVault, this.refreshSignal});
 
   @override
   State<NetworkTopologyCard> createState() => _NetworkTopologyCardState();
@@ -84,10 +90,17 @@ class _NetworkTopologyCardState extends State<NetworkTopologyCard>
     _fetchKnocks();
     _statsTimer = Timer.periodic(const Duration(seconds: 12), (_) => _fetchStats());
     _knockTimer = Timer.periodic(const Duration(seconds: 4), (_) => _fetchKnocks());
+    widget.refreshSignal?.addListener(_onRefreshSignal);
+  }
+
+  void _onRefreshSignal() {
+    _fetchStats();
+    _fetchKnocks();
   }
 
   @override
   void dispose() {
+    widget.refreshSignal?.removeListener(_onRefreshSignal);
     WidgetsBinding.instance.removeObserver(this);
     _statsTimer?.cancel();
     _knockTimer?.cancel();
@@ -170,14 +183,21 @@ class _NetworkTopologyCardState extends State<NetworkTopologyCard>
       }
     } catch (_) {}
 
-    // This device's own direct probe found no local tunnel, but recent
-    // knock activity from anyone (admin or vendor) is proof the gateway
-    // itself is alive and working — that's a materially different state
-    // from a genuinely unreachable gateway, even though this device can't
-    // verify it directly either way.
+    // This device's own direct probe found no local tunnel, but that
+    // doesn't mean the gateway is down — vendorCount is a genuinely
+    // reliable "is there a currently-active session right now" signal
+    // (the backend filters it by valid_until > now, not just a recent
+    // event), unlike a bare knock timestamp: a knock is a single instant,
+    // but the session it opens can stay valid for a full hour afterward
+    // (SESSION_TIMEOUT) — checking only the last few minutes since that
+    // instant made this go back to "offline" long before the session
+    // itself actually ended. The lastKnock fallback below uses that same
+    // ~1h window instead, for the admin case where no equivalent
+    // expiry-aware count exists yet.
     if (status == GatewayStatus.offline &&
-        lastKnock != null &&
-        DateTime.now().difference(lastKnock).inMinutes < 3) {
+        (vendorCount > 0 ||
+            (lastKnock != null &&
+                DateTime.now().difference(lastKnock).inMinutes < 60))) {
       status = GatewayStatus.liveRemote;
     }
 
